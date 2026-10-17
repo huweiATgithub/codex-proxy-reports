@@ -1,0 +1,132 @@
+name: Release
+run-name: Release ${{ github.ref_name }}
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  preflight:
+    name: Validate release source
+    runs-on: ubuntu-22.04
+    timeout-minutes: 5
+    outputs:
+      commit: ${{ steps.source.outputs.commit }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24'
+      - name: Check committed versions
+        id: version
+        run: node scripts/version.js >> "$GITHUB_OUTPUT"
+      - name: Require the matching version tag on main
+        id: source
+        env:
+          EXPECTED_TAG: ${{ steps.version.outputs.tag }}
+          PUSHED_TAG: ${{ github.ref_name }}
+        run: |
+          test "$PUSHED_TAG" = "$EXPECTED_TAG"
+          git merge-base --is-ancestor HEAD origin/main
+          printf 'commit=%s\n' "$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+      - name: Validate tag target and refuse existing releases
+        env:
+          RELEASE_TAG: ${{ steps.version.outputs.tag }}
+          RELEASE_COMMIT: ${{ steps.source.outputs.commit }}
+          GH_REPO: ${{ github.repository }}
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/check-release.js
+
+  verify:
+    name: Release acceptance
+    needs: preflight
+    uses: ./.github/workflows/ci.yml
+    permissions:
+      contents: read
+
+  publish:
+    name: Publish tested package
+    needs: [preflight, verify]
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    env:
+      GH_REPO: ${{ github.repository }}
+      GH_TOKEN: ${{ github.token }}
+      RELEASE_TAG: ${{ needs.verify.outputs.tag }}
+      RELEASE_COMMIT: ${{ needs.preflight.outputs.commit }}
+      VERSION: ${{ needs.verify.outputs.version }}
+      ARCHIVE: ${{ needs.verify.outputs.archive }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ needs.preflight.outputs.commit }}
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24'
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: linux-x86_64-package
+          path: dist/release
+      - name: Verify the transferred artifact and release availability
+        run: |
+          (cd dist/release && sha256sum --check SHA256SUMS)
+          node scripts/check-release.js
+      - name: Attest package provenance
+        id: provenance
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-path: dist/release/${{ needs.verify.outputs.archive }}
+          create-storage-record: false
+      - name: Prepare release notes
+        run: |
+          cat > "$RUNNER_TEMP/release-notes.md" <<EOF_NOTES
+          Usage reports **$VERSION** for **codex-proxy-rs v3.29.x**.
+
+          Install \`$ARCHIVE\` through the host plugin manager. Linux x86_64 GNU, glibc 2.34 or newer. No instance configuration or middleware binding is required.
+
+          This exact package passed Rust, JavaScript, browser and real-host v3.29.0 acceptance tests. SHA256 checksums and GitHub build provenance accompany the package.
+
+          Verify provenance with \`gh attestation verify $ARCHIVE --repo $GH_REPO\`.
+          EOF_NOTES
+      - name: Upload assets to a draft, then publish
+        env:
+          PROVENANCE_BUNDLE: ${{ steps.provenance.outputs.bundle-path }}
+        run: |
+          cp "$PROVENANCE_BUNDLE" dist/release/provenance.jsonl
+          gh release create "$RELEASE_TAG" --repo "$GH_REPO" --verify-tag --target "$RELEASE_COMMIT" \
+            --draft --title "$RELEASE_TAG" --generate-notes --notes-file "$RUNNER_TEMP/release-notes.md" \
+            "dist/release/$ARCHIVE" "dist/release/$ARCHIVE.sha256" dist/release/SHA256SUMS \
+            dist/release/provenance.jsonl
+          gh release edit "$RELEASE_TAG" --repo "$GH_REPO" --draft=false --latest
+      - name: Verify public downloads and provenance
+        run: |
+          node scripts/verify-release.js dist/release
+          gh attestation verify "dist/release/$ARCHIVE" --repo "$GH_REPO" \
+            --signer-workflow "$GH_REPO/.github/workflows/release.yml" \
+            --source-digest "$RELEASE_COMMIT" --source-ref "refs/tags/$RELEASE_TAG"
+          printf 'Published [%s](https://github.com/%s/releases/tag/%s) from `%s`.\n' \
+            "$RELEASE_TAG" "$GH_REPO" "$RELEASE_TAG" "$RELEASE_COMMIT" >> "$GITHUB_STEP_SUMMARY"
+      - name: Preserve publication verification
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: public-release-verification
+          path: dist/release/public-verification.json
+          if-no-files-found: ignore
+          retention-days: 14

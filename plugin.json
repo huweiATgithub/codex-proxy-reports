@@ -4,7 +4,7 @@
   "name": "usage-reports",
   "displayName": "Usage reports",
   "description": "Client Key request distributions with model, reasoning effort and Subagent overlays",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "license": "UNLICENSED",
   "runtime": "trustedProcess",
   "main": "codex-proxy-reports",

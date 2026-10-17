@@ -1,0 +1,120 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+  workflow_call:
+    outputs:
+      version:
+        value: ${{ jobs.verify.outputs.version }}
+      tag:
+        value: ${{ jobs.verify.outputs.tag }}
+      archive:
+        value: ${{ jobs.verify.outputs.archive }}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'push' || github.event_name == 'pull_request' }}
+
+jobs:
+  verify:
+    name: Test and package (Linux x86_64)
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      tag: ${{ steps.version.outputs.tag }}
+      archive: ${{ steps.version.outputs.archive }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ github.sha }}
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24'
+          cache: npm
+      - name: Check release versions
+        id: version
+        run: node scripts/version.js >> "$GITHUB_OUTPUT"
+      - name: Install the pinned Rust toolchain
+        run: |
+          rustup toolchain install "$(awk -F '"' '/^channel =/ { print $2 }' rust-toolchain.toml)" \
+            --profile minimal --component clippy --component rustfmt
+      - run: npm ci
+      - name: Build private management resources
+        run: npm run build
+      - name: Rust formatting, lint and tests
+        run: |
+          cargo fmt --manifest-path backend/Cargo.toml -- --check
+          cargo clippy --manifest-path backend/Cargo.toml --all-targets --locked -- -D warnings
+          cargo test --manifest-path backend/Cargo.toml --locked
+      - name: JavaScript and release tooling tests
+        run: npm test
+      - name: Install Chromium
+        run: npx playwright install --with-deps chromium
+      - name: Browser tests
+        run: npx playwright test
+      - name: Prepare the matching host and packaging CLI
+        id: host
+        run: bash scripts/prepare-host.sh "$RUNNER_TEMP/host-v3.29.0"
+      - name: Build and package the plugin
+        env:
+          CPR_PLUGIN: ${{ steps.host.outputs.plugin-cli }}
+          ARCHIVE: ${{ steps.version.outputs.archive }}
+        run: |
+          cargo build --manifest-path backend/Cargo.toml --release --locked
+          npm run plugin:package
+          node scripts/verify-package.js "dist/packages/$ARCHIVE"
+          maximum=$(readelf --version-info backend/target/release/codex-proxy-reports | \
+            sed -n 's/.*Name: GLIBC_\([0-9.]*\).*/\1/p' | sort -V | tail -n 1)
+          test -n "$maximum"
+          test "$(printf '%s\n' "$maximum" '2.34' | sort -V | tail -n 1)" = '2.34'
+          cd dist/packages
+          sha256sum "$ARCHIVE" "$ARCHIVE.sha256" > SHA256SUMS
+      - name: Install and test the exact package on host v3.29.0
+        env:
+          HOST_BINARY: ${{ steps.host.outputs.host-binary }}
+          HOST_WEB: ${{ steps.host.outputs.host-web }}
+          CPR_PLUGIN: ${{ steps.host.outputs.plugin-cli }}
+          ARCHIVE: ${{ steps.version.outputs.archive }}
+          TMPDIR: ${{ runner.temp }}/integration
+        run: |
+          mkdir -p "$TMPDIR"
+          npm run test:integration -- --host-binary "$HOST_BINARY" --host-web "$HOST_WEB" \
+            --plugin-cli "$CPR_PLUGIN" --package "dist/packages/$ARCHIVE" --browser
+      - name: Upload the tested installable package
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: linux-x86_64-package
+          path: |
+            dist/packages/${{ steps.version.outputs.archive }}
+            dist/packages/${{ steps.version.outputs.archive }}.sha256
+            dist/packages/SHA256SUMS
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 0
+      - name: Preserve browser and host acceptance evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: test-evidence
+          path: |
+            test-results/
+            ${{ runner.temp }}/integration/codex-reports-integration-*/result.json
+            ${{ runner.temp }}/integration/codex-reports-integration-*/host.log
+            ${{ runner.temp }}/integration/codex-reports-integration-*/real-host-report.png
+          if-no-files-found: ignore
+          retention-days: 7
+      - name: Summarize the tested package
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          printf 'Tested **%s**, Linux x86_64 GNU, host **v3.29.0**.\n\n' "$VERSION" >> "$GITHUB_STEP_SUMMARY"
+          printf 'Rust, JavaScript, browser, package integrity and real-host acceptance checks passed.\n\n' >> "$GITHUB_STEP_SUMMARY"
+          cat dist/packages/SHA256SUMS >> "$GITHUB_STEP_SUMMARY"

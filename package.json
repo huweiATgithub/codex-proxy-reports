@@ -1,16 +1,17 @@
 {
   "name": "codex-proxy-usage-reports",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "private": true,
   "type": "module",
   "engines": { "node": ">=24" },
   "scripts": {
     "build": "node scripts/build.js",
+    "version:set": "node scripts/version.js",
     "plugin:build": "npm run build && cargo build --manifest-path backend/Cargo.toml --locked --release",
     "plugin:package": "node scripts/package-plugin.js",
     "demo": "npm run build && node demo/server.js",
     "preview": "node demo/server.js",
-    "test": "node --test tests/*.test.js",
+    "test": "node --test --test-isolation=none tests/*.test.js",
     "test:integration": "node scripts/integration.js",
     "test:ui": "npm run build && playwright test"
   },
