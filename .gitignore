@@ -1,0 +1,9 @@
+.venv/
+__pycache__/
+.matplotlib/
+backend/target/
+node_modules/
+dist/
+.local/
+test-results/
+playwright-report/

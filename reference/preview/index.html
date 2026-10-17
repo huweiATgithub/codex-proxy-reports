@@ -1,0 +1,122 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>Client Key · 模型使用分布</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <main class="page">
+    <p class="eyebrow">VISUAL REFERENCE · SYNTHETIC DATA</p>
+    <header class="page-heading">
+      <div>
+        <h1>Client Key 模型使用分布（合成示例）</h1>
+        <p class="period"><time>2026.10.10 08:00:00</time> — <time>2026.10.17 08:00:00</time> · Asia/Shanghai</p>
+        <p class="filter-note">已排除 UA <code>^prompt</code> · 530 次成功请求</p>
+        <p class="filter-note">另排除自动触发模型 <code>codex-auto-review</code>、<code>gpt-5.6-luna</code> · 520 次成功请求</p>
+      </div>
+    </header>
+    <div class="guide">
+      <span><strong>6 个 Client Key · 6,000 次成功请求</strong><span class="muted">　展示 &gt;5% 的前 5 项，其余归入 Others</span></span>
+      <span class="legend"><span class="shadow-swatch" aria-hidden="true"></span><span>半透明浮层 = Subagent</span></span>
+    </div>
+    <section class="grid" aria-label="每个 Client Key 的模型使用饼图">
+      
+        <article class="chart-card">
+          <div class="card-heading"><div><h2>Client A</h2><p>1,000 次请求</p></div>
+            <button class="enlarge" type="button" data-chart="client-1" data-name="Client A"
+              data-total="1,000" aria-label="放大 Client A 的图表">放大 ↗</button>
+          </div>
+          <button class="chart-button" type="button" data-chart="client-1" data-name="Client A"
+            data-total="1,000" aria-label="放大 Client A 的图表">
+            <img src="charts/client-1.svg" alt="Client A 的模型与 reasoning effort 分布；同色半透明浮层表示 Subagent" width="1600" height="1080">
+          </button>
+        </article>
+
+        <article class="chart-card">
+          <div class="card-heading"><div><h2>Client B</h2><p>1,000 次请求</p></div>
+            <button class="enlarge" type="button" data-chart="client-2" data-name="Client B"
+              data-total="1,000" aria-label="放大 Client B 的图表">放大 ↗</button>
+          </div>
+          <button class="chart-button" type="button" data-chart="client-2" data-name="Client B"
+            data-total="1,000" aria-label="放大 Client B 的图表">
+            <img src="charts/client-2.svg" alt="Client B 的模型与 reasoning effort 分布；同色半透明浮层表示 Subagent" width="1600" height="1080">
+          </button>
+        </article>
+
+        <article class="chart-card">
+          <div class="card-heading"><div><h2>Client C</h2><p>1,000 次请求</p></div>
+            <button class="enlarge" type="button" data-chart="client-3" data-name="Client C"
+              data-total="1,000" aria-label="放大 Client C 的图表">放大 ↗</button>
+          </div>
+          <button class="chart-button" type="button" data-chart="client-3" data-name="Client C"
+            data-total="1,000" aria-label="放大 Client C 的图表">
+            <img src="charts/client-3.svg" alt="Client C 的模型与 reasoning effort 分布；同色半透明浮层表示 Subagent" width="1600" height="1080">
+          </button>
+        </article>
+
+        <article class="chart-card">
+          <div class="card-heading"><div><h2>Client D</h2><p>1,000 次请求</p></div>
+            <button class="enlarge" type="button" data-chart="client-4" data-name="Client D"
+              data-total="1,000" aria-label="放大 Client D 的图表">放大 ↗</button>
+          </div>
+          <button class="chart-button" type="button" data-chart="client-4" data-name="Client D"
+            data-total="1,000" aria-label="放大 Client D 的图表">
+            <img src="charts/client-4.svg" alt="Client D 的模型与 reasoning effort 分布；同色半透明浮层表示 Subagent" width="1600" height="1080">
+          </button>
+        </article>
+
+        <article class="chart-card">
+          <div class="card-heading"><div><h2>Client E</h2><p>1,000 次请求</p></div>
+            <button class="enlarge" type="button" data-chart="client-5" data-name="Client E"
+              data-total="1,000" aria-label="放大 Client E 的图表">放大 ↗</button>
+          </div>
+          <button class="chart-button" type="button" data-chart="client-5" data-name="Client E"
+            data-total="1,000" aria-label="放大 Client E 的图表">
+            <img src="charts/client-5.svg" alt="Client E 的模型与 reasoning effort 分布；同色半透明浮层表示 Subagent" width="1600" height="1080">
+          </button>
+        </article>
+
+        <article class="chart-card">
+          <div class="card-heading"><div><h2>Client F</h2><p>1,000 次请求</p></div>
+            <button class="enlarge" type="button" data-chart="client-6" data-name="Client F"
+              data-total="1,000" aria-label="放大 Client F 的图表">放大 ↗</button>
+          </div>
+          <button class="chart-button" type="button" data-chart="client-6" data-name="Client F"
+            data-total="1,000" aria-label="放大 Client F 的图表">
+            <img src="charts/client-6.svg" alt="Client F 的模型与 reasoning effort 分布；同色半透明浮层表示 Subagent" width="1600" height="1080">
+          </button>
+        </article>
+    </section>
+    <footer>
+      <p>每种颜色代表一个「模型 / reasoning effort」组合，各图保持同色。扇区标注该组合占对应 Key 的请求比例；Others 不展开。</p>
+      <p>Subagent 以同色半透明浮层表示；角度对应请求占比，外沿略微凸出以表现层次。占比以 UA 与模型过滤后的成功用量请求为分母，排除预热、失败、取消及未完成请求；未记录的 effort 保持独立分类。</p>
+    </footer>
+  </main>
+  <dialog id="chart-dialog" aria-labelledby="dialog-title">
+    <div class="dialog-heading"><div><h2 id="dialog-title"></h2><p id="dialog-count"></p></div><button class="close" type="button">关闭 ×</button></div>
+    <img class="dialog-image" id="dialog-image" alt="">
+    <div class="dialog-footer"><span class="legend"><span class="shadow-swatch" aria-hidden="true"></span>半透明浮层 = Subagent</span></div>
+  </dialog>
+  <script>
+    const dialog = document.getElementById('chart-dialog');
+    document.querySelectorAll('[data-chart]').forEach(button => {
+      button.addEventListener('click', () => {
+        document.getElementById('dialog-title').textContent = button.dataset.name;
+        document.getElementById('dialog-count').textContent = button.dataset.total + ' 次请求';
+        const image = document.getElementById('dialog-image');
+        image.src = 'charts/' + button.dataset.chart + '.svg';
+        image.alt = button.dataset.name + ' 的模型使用分布';
+        dialog.showModal();
+      });
+    });
+    document.querySelector('.close').addEventListener('click', () => dialog.close());
+    dialog.addEventListener('click', event => { if (event.target === dialog) {
+      const rect = dialog.getBoundingClientRect();
+      if (event.clientX < rect.left || event.clientX > rect.right || event.clientY < rect.top || event.clientY > rect.bottom) dialog.close();
+    }});
+  </script>
+</body>
+</html>

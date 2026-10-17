@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>Usage reports</title>
+  <link rel="stylesheet" href="app.css">
+  <script defer src="app.js"></script>
+</head>
+<body>
+  <main class="page">
+    <div id="connection-notice" class="notice" role="status" hidden></div>
+    <section id="home-view" class="home-view">
+      <header class="view-heading"><div><h1 tabindex="-1">Reports</h1><p class="introduction">Successful request usage, by model and reasoning effort.</p></div><button id="new-report" class="primary" type="button">New report <span aria-hidden="true">＋</span></button></header>
+      <section id="home-task" class="generation-card" aria-label="Latest generation" hidden></section>
+      <section class="library" aria-labelledby="saved-title">
+        <div class="section-heading"><div><h2 id="saved-title">Saved reports</h2><p id="list-note" class="muted small">Latest 20 saved reports</p></div><button id="refresh" class="text-button" type="button">Refresh</button></div>
+        <p id="list-error" class="error-copy" role="alert" hidden></p>
+        <div id="reports-list"><p class="empty-copy">Loading saved reports…</p></div>
+      </section>
+    </section>
+    <section id="wizard-view" class="focused-view" hidden>
+      <button class="back-link" data-home type="button">← Back to Reports</button>
+      <header class="view-heading"><div><h1 tabindex="-1">New report</h1><p class="introduction">Choose the history to include in your report.</p></div></header>
+      <ol class="steps" aria-label="Submission steps"><li id="configure-marker" aria-current="step"><span>1</span> Configure</li><li id="review-marker"><span>2</span> Review</li></ol>
+      <p id="draft-source" class="notice" hidden></p>
+      <div id="configure-step">
+        <form id="configuration" class="configuration">
+          <fieldset><legend>Time range</legend><div class="form-grid">
+            <label>Period<select id="window-kind"><option value="relative">Last 7 × 24 hours</option><option value="custom">Custom dates</option></select></label>
+            <label>Timezone<input id="timezone" type="text" required spellcheck="false" autocomplete="off" aria-describedby="timezone-help"><span id="timezone-help" class="field-help">IANA name, such as America/New_York or UTC.</span></label>
+            <div id="custom-dates" class="custom-dates" hidden><label>Start date<input id="start-date" type="date"></label><label>End date (inclusive)<input id="end-date" type="date"></label></div>
+          </div><p class="field-help section-help">Relative periods end when you confirm. Custom dates include both dates in the selected timezone.</p></fieldset>
+          <fieldset><legend>Exclusions</legend><p class="section-description">Matching requests will be left out of this report.</p><div class="form-grid">
+            <label>User agents<textarea id="user-agent-patterns" rows="3" spellcheck="false" aria-describedby="ua-help">^prompt</textarea><span id="ua-help" class="field-help">One case-sensitive regular expression per line. Rust regex syntax; no lookaround or backreferences. Leave blank to exclude none.</span></label>
+            <label>Models<textarea id="excluded-models" rows="3" spellcheck="false" aria-describedby="models-help">codex-auto-review
+gpt-5.6-luna</textarea><span id="models-help" class="field-help">One exact, case-sensitive model ID per line. Leave blank to exclude none.</span></label>
+          </div></fieldset>
+          <div class="form-footnote">All host Keys are included. Settings reset on page refresh.</div>
+          <p id="configure-error" class="error-copy" role="alert" hidden></p>
+          <div class="form-actions"><button id="continue-review" class="primary" type="button">Continue to review →</button></div>
+        </form>
+      </div>
+      <section id="review-step" class="configuration" hidden>
+        <h2 tabindex="-1">Review your report</h2><p class="section-description">Scan retained successful request history with these settings.</p>
+        <dl id="confirmation-summary" class="summary"></dl>
+        <p class="review-note">Generation continues if you leave this page while the host and plugin remain running. Only one report can run at a time.</p>
+        <div id="busy-notice" class="notice" hidden><p>Another report is being generated. You can submit when it finishes.</p><button class="text-button" id="view-current" type="button">View current generation →</button></div>
+        <p id="confirmation-error" class="error-copy" role="alert" hidden></p>
+        <div class="form-actions split"><button id="back-to-edit" type="button">Back to edit</button><button id="confirm-generate" class="primary" type="button">Confirm and generate</button></div>
+      </section>
+    </section>
+    <section id="task-view" class="focused-view" hidden>
+      <button class="back-link" data-home type="button">← Back to Reports</button>
+      <header class="view-heading"><h1 tabindex="-1">Report generation</h1></header>
+      <section id="task-status" class="task-status" aria-label="Report generation status" aria-live="polite"></section>
+    </section>
+    <section id="report-view" hidden>
+      <button class="back-link" data-home type="button">← Back to Reports</button>
+      <header class="view-heading"><div><h1 tabindex="-1">Usage report</h1><p id="report-window" class="introduction"></p><p id="report-created" class="muted small"></p></div><button id="reuse" type="button" disabled>Reuse configuration</button></header>
+      <p id="report-loading" class="empty-copy" role="status" hidden>Loading report…</p>
+      <p id="report-error" class="error-copy" role="alert" hidden></p>
+      <section id="report" hidden>
+        <p class="report-counts"><strong id="report-total"></strong><span aria-hidden="true"> · </span><span id="key-count"></span></p>
+        <section class="report-context" aria-labelledby="exclusions-title"><h2 id="exclusions-title">Exclusions applied</h2><div id="report-metadata" class="report-metadata"></div><details><summary>Report details</summary><div id="report-details" class="report-metadata"></div></details></section>
+        <div class="guide"><span class="muted">Top 5 choices strictly above 5%; remaining choices form Others.</span><span class="legend"><span class="shadow-swatch" aria-hidden="true"></span>Translucent overlay = Subagent</span></div>
+        <div id="charts" class="grid" aria-label="Model usage charts by Client Key"></div>
+        <footer><p>Each color represents a model / reasoning effort combination. Percentages use each Key’s retained successful requests. 未记录 means no reasoning effort was recorded.</p><p>The Subagent overlay’s angle encodes its requests within the parent sector; the raised rim is decorative. Unmarked requests do not necessarily originate from a main agent.</p></footer>
+      </section>
+    </section>
+  </main>
+  <dialog id="chart-dialog" class="chart-dialog" aria-labelledby="chart-dialog-title"><div class="dialog-heading"><div><h2 id="chart-dialog-title"></h2><p id="chart-dialog-count" class="muted"></p></div><button class="close" type="button" data-close="chart-dialog" aria-label="Close enlarged chart">×</button></div><div id="chart-dialog-content"></div><div class="dialog-footer"><span class="legend"><span class="shadow-swatch" aria-hidden="true"></span>Translucent overlay = Subagent</span></div></dialog>
+</body>
+</html>

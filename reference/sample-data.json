@@ -1,0 +1,415 @@
+{
+  "description": "Synthetic successful-usage groups for reproducing visuals; not production records.",
+  "client_keys": [
+    {
+      "id": "client-a",
+      "name": "Client A"
+    },
+    {
+      "id": "client-b",
+      "name": "Client B"
+    },
+    {
+      "id": "client-c",
+      "name": "Client C"
+    },
+    {
+      "id": "client-d",
+      "name": "Client D"
+    },
+    {
+      "id": "client-e",
+      "name": "Client E"
+    },
+    {
+      "id": "client-f",
+      "name": "Client F"
+    }
+  ],
+  "successful_usage_groups": [
+    {
+      "client_key_id": "client-a",
+      "model": "gpt-6-astra",
+      "reasoning_effort": "xhigh",
+      "subagent_kind": null,
+      "user_agent": "codex/visual-reference",
+      "requests": 110
+    },
+    {
+      "client_key_id": "client-a",
+      "model": "gpt-6-astra",
+      "reasoning_effort": "xhigh",
+      "subagent_kind": "thread_spawn",
+      "user_agent": "codex/visual-reference",
+      "requests": 330
+    },
+    {
+      "client_key_id": "client-a",
+      "model": "gpt-6.1-sol",
+      "reasoning_effort": "xhigh",
+      "subagent_kind": null,
+      "user_agent": "codex/visual-reference",
+      "requests": 240
+    },
+    {
+      "client_key_id": "client-a",
+      "model": "gpt-6.1-sol",
+      "reasoning_effort": "xhigh",
+      "subagent_kind": "thread_spawn",
+      "user_agent": "codex/visual-reference",
+      "requests": 200
+    },
+    {
+      "client_key_id": "client-a",
+      "model": "gpt-6-astra",
+      "reasoning_effort": "max",
+      "subagent_kind": null,
+      "user_agent": "codex/visual-reference",
+      "requests": 74
+    },
+    {
+      "client_key_id": "client-a",
+      "model": "gpt-6-astra",
+      "reasoning_effort": "max",
+      "subagent_kind": "thread_spawn",
+      "user_agent": "codex/visual-reference",
+      "requests": 1
+    },
+    {
+      "client_key_id": "client-a",
+      "model": "gpt-6-astra",
+      "reasoning_effort": "high",
+      "subagent_kind": null,
+      "user_agent": "codex/visual-reference",
+      "requests": 45
+    },
+    {
+      "client_key_id": "client-a",
+      "model": "codex-auto-review",
+      "reasoning_effort": "low",
+      "subagent_kind": "guardian",
+      "user_agent": "codex/visual-reference",
+      "requests": 120
+    },
+    {
+      "client_key_id": "client-a",
+      "model": "gpt-5.6-luna",
+      "reasoning_effort": "low",
+      "subagent_kind": "thread_spawn",
+      "user_agent": "codex/visual-reference",
+      "requests": 80
+    },
+    {
+      "client_key_id": "client-a",
+      "model": "gpt-6-astra",
+      "reasoning_effort": "max",
+      "subagent_kind": null,
+      "user_agent": "prompt_diary/visual-reference",
+      "requests": 500
+    },
+    {
+      "client_key_id": "client-a",
+      "model": "codex-auto-review",
+      "reasoning_effort": "low",
+      "subagent_kind": "guardian",
+      "user_agent": "prompt_diary/visual-reference",
+      "requests": 30
+    },
+    {
+      "client_key_id": "client-b",
+      "model": "gpt-6-astra",
+      "reasoning_effort": "max",
+      "subagent_kind": null,
+      "user_agent": "codex/visual-reference",
+      "requests": 950
+    },
+    {
+      "client_key_id": "client-b",
+      "model": "gpt-6-astra",
+      "reasoning_effort": "high",
+      "subagent_kind": null,
+      "user_agent": "codex/visual-reference",
+      "requests": 25
+    },
+    {
+      "client_key_id": "client-b",
+      "model": "gpt-6.1-sol",
+      "reasoning_effort": "xhigh",
+      "subagent_kind": null,
+      "user_agent": "codex/visual-reference",
+      "requests": 25
+    },
+    {
+      "client_key_id": "client-b",
+      "model": "gpt-5.6-luna",
+      "reasoning_effort": "low",
+      "subagent_kind": "thread_spawn",
+      "user_agent": "codex/visual-reference",
+      "requests": 100
+    },
+    {
+      "client_key_id": "client-c",
+      "model": "gpt-6-astra",
+      "reasoning_effort": "xhigh",
+      "subagent_kind": null,
+      "user_agent": "codex/visual-reference",
+      "requests": 180
+    },
+    {
+      "client_key_id": "client-c",
+      "model": "gpt-6-astra",
+      "reasoning_effort": "xhigh",
+      "subagent_kind": "thread_spawn",
+      "user_agent": "codex/visual-reference",
+      "requests": 120
+    },
+    {
+      "client_key_id": "client-c",
+      "model": "gpt-6.1-sol",
+      "reasoning_effort": "xhigh",
+      "subagent_kind": null,
+      "user_agent": "codex/visual-reference",
+      "requests": 170
+    },
+    {
+      "client_key_id": "client-c",
+      "model": "gpt-6.1-sol",
+      "reasoning_effort": "xhigh",
+      "subagent_kind": "thread_spawn",
+      "user_agent": "codex/visual-reference",
+      "requests": 50
+    },
+    {
+      "client_key_id": "client-c",
+      "model": "gpt-6-astra",
+      "reasoning_effort": "max",
+      "subagent_kind": null,
+      "user_agent": "codex/visual-reference",
+      "requests": 180
+    },
+    {
+      "client_key_id": "client-c",
+      "model": "gpt-6.1-sol",
+      "reasoning_effort": "high",
+      "subagent_kind": null,
+      "user_agent": "codex/visual-reference",
+      "requests": 80
+    },
+    {
+      "client_key_id": "client-c",
+      "model": "gpt-6.1-sol",
+      "reasoning_effort": "high",
+      "subagent_kind": "thread_spawn",
+      "user_agent": "codex/visual-reference",
+      "requests": 40
+    },
+    {
+      "client_key_id": "client-c",
+      "model": "gpt-6.1-sol",
+      "reasoning_effort": "medium",
+      "subagent_kind": null,
+      "user_agent": "codex/visual-reference",
+      "requests": 80
+    },
+    {
+      "client_key_id": "client-c",
+      "model": "gpt-6.1-sol",
+      "reasoning_effort": "medium",
+      "subagent_kind": "thread_spawn",
+      "user_agent": "codex/visual-reference",
+      "requests": 20
+    },
+    {
+      "client_key_id": "client-c",
+      "model": "gpt-6-astra",
+      "reasoning_effort": "high",
+      "subagent_kind": null,
+      "user_agent": "codex/visual-reference",
+      "requests": 70
+    },
+    {
+      "client_key_id": "client-c",
+      "model": "gpt-6-astra",
+      "reasoning_effort": "high",
+      "subagent_kind": "thread_spawn",
+      "user_agent": "codex/visual-reference",
+      "requests": 10
+    },
+    {
+      "client_key_id": "client-d",
+      "model": "gpt-6.1-sol",
+      "reasoning_effort": "xhigh",
+      "subagent_kind": null,
+      "user_agent": "codex/visual-reference",
+      "requests": 340
+    },
+    {
+      "client_key_id": "client-d",
+      "model": "gpt-6.1-sol",
+      "reasoning_effort": "xhigh",
+      "subagent_kind": "thread_spawn",
+      "user_agent": "codex/visual-reference",
+      "requests": 150
+    },
+    {
+      "client_key_id": "client-d",
+      "model": "gpt-6-astra",
+      "reasoning_effort": "high",
+      "subagent_kind": null,
+      "user_agent": "codex/visual-reference",
+      "requests": 230
+    },
+    {
+      "client_key_id": "client-d",
+      "model": "gpt-6-astra",
+      "reasoning_effort": "high",
+      "subagent_kind": "thread_spawn",
+      "user_agent": "codex/visual-reference",
+      "requests": 50
+    },
+    {
+      "client_key_id": "client-d",
+      "model": "gpt-6.1-sol",
+      "reasoning_effort": "high",
+      "subagent_kind": null,
+      "user_agent": "codex/visual-reference",
+      "requests": 30
+    },
+    {
+      "client_key_id": "client-d",
+      "model": "gpt-6.1-sol",
+      "reasoning_effort": "high",
+      "subagent_kind": "thread_spawn",
+      "user_agent": "codex/visual-reference",
+      "requests": 60
+    },
+    {
+      "client_key_id": "client-d",
+      "model": "gpt-6.1-sol",
+      "reasoning_effort": "medium",
+      "subagent_kind": null,
+      "user_agent": "codex/visual-reference",
+      "requests": 79
+    },
+    {
+      "client_key_id": "client-d",
+      "model": "gpt-6.1-sol",
+      "reasoning_effort": "medium",
+      "subagent_kind": "thread_spawn",
+      "user_agent": "codex/visual-reference",
+      "requests": 1
+    },
+    {
+      "client_key_id": "client-d",
+      "model": "gpt-6-astra",
+      "reasoning_effort": "max",
+      "subagent_kind": null,
+      "user_agent": "codex/visual-reference",
+      "requests": 35
+    },
+    {
+      "client_key_id": "client-d",
+      "model": "gpt-6-luna",
+      "reasoning_effort": "high",
+      "subagent_kind": null,
+      "user_agent": "codex/visual-reference",
+      "requests": 25
+    },
+    {
+      "client_key_id": "client-e",
+      "model": "gpt-6-astra",
+      "reasoning_effort": "xhigh",
+      "subagent_kind": null,
+      "user_agent": "codex/visual-reference",
+      "requests": 820
+    },
+    {
+      "client_key_id": "client-e",
+      "model": "gpt-6-astra",
+      "reasoning_effort": "xhigh",
+      "subagent_kind": "thread_spawn",
+      "user_agent": "codex/visual-reference",
+      "requests": 60
+    },
+    {
+      "client_key_id": "client-e",
+      "model": "gpt-6.1-sol",
+      "reasoning_effort": "xhigh",
+      "subagent_kind": null,
+      "user_agent": "codex/visual-reference",
+      "requests": 30
+    },
+    {
+      "client_key_id": "client-e",
+      "model": "gpt-6.1-sol",
+      "reasoning_effort": "xhigh",
+      "subagent_kind": "thread_spawn",
+      "user_agent": "codex/visual-reference",
+      "requests": 10
+    },
+    {
+      "client_key_id": "client-e",
+      "model": "gpt-6-astra",
+      "reasoning_effort": "high",
+      "subagent_kind": null,
+      "user_agent": "codex/visual-reference",
+      "requests": 35
+    },
+    {
+      "client_key_id": "client-e",
+      "model": "gpt-6-astra",
+      "reasoning_effort": "high",
+      "subagent_kind": "thread_spawn",
+      "user_agent": "codex/visual-reference",
+      "requests": 5
+    },
+    {
+      "client_key_id": "client-e",
+      "model": "gpt-6-luna",
+      "reasoning_effort": "high",
+      "subagent_kind": null,
+      "user_agent": "codex/visual-reference",
+      "requests": 40
+    },
+    {
+      "client_key_id": "client-e",
+      "model": "codex-auto-review",
+      "reasoning_effort": "low",
+      "subagent_kind": null,
+      "user_agent": "codex/visual-reference",
+      "requests": 20
+    },
+    {
+      "client_key_id": "client-e",
+      "model": "codex-auto-review",
+      "reasoning_effort": "low",
+      "subagent_kind": "guardian",
+      "user_agent": "codex/visual-reference",
+      "requests": 100
+    },
+    {
+      "client_key_id": "client-e",
+      "model": "gpt-5.6-luna",
+      "reasoning_effort": "low",
+      "subagent_kind": "thread_spawn",
+      "user_agent": "codex/visual-reference",
+      "requests": 100
+    },
+    {
+      "client_key_id": "client-f",
+      "model": "gpt-6-astra",
+      "reasoning_effort": "max",
+      "subagent_kind": null,
+      "user_agent": "Prompt_Diary/visual-reference",
+      "requests": 810
+    },
+    {
+      "client_key_id": "client-f",
+      "model": "gpt-6-astra",
+      "reasoning_effort": null,
+      "subagent_kind": null,
+      "user_agent": null,
+      "requests": 190
+    }
+  ]
+}

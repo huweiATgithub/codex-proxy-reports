@@ -1,0 +1,20 @@
+{
+  "manifestVersion": 2,
+  "publisher": "huwei",
+  "name": "usage-reports",
+  "displayName": "Usage reports",
+  "description": "Client Key request distributions with model, reasoning effort and Subagent overlays",
+  "version": "0.1.1",
+  "license": "UNLICENSED",
+  "runtime": "trustedProcess",
+  "main": "codex-proxy-reports",
+  "engines": { "codex-proxy-rs": "~3.29.0" },
+  "contributes": { "management": { "version": 2 }, "maintenance": {} },
+  "configurationSchema": { "type": "object", "additionalProperties": false, "properties": {} },
+  "secretFields": [],
+  "state": [
+    { "namespace": "control", "schemaVersion": 1, "schema": { "type": "object" }, "maximumRecords": 2, "maximumBytes": 131072, "maximumValueBytes": 57344 },
+    { "namespace": "reports", "schemaVersion": 1, "schema": { "type": "object" }, "maximumRecords": 22, "maximumBytes": 2097152, "maximumValueBytes": 49152 }
+  ],
+  "resources": {}
+}
