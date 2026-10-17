@@ -1,3 +1,6 @@
+import { resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
 function parseVersionTag(value, label) {
   if (typeof value !== 'string' || /^v(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)$/.exec(value)?.[0] !== value) {
     throw new Error(`${label} must be a stable version such as v0.1.2.`);
@@ -89,7 +92,7 @@ export async function checkReleaseTarget({ tag, commit, repository, token, fetch
   return { tag, commit: expectedCommit, repository };
 }
 
-if (import.meta.main) {
+if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   try {
     const { tag, commit, repository } = await checkReleaseTarget({ tag: process.env.RELEASE_TAG, commit: process.env.RELEASE_COMMIT, repository: process.env.GH_REPO, token: process.env.GH_TOKEN });
     console.log(`Release ${tag} is available for ${repository} at ${commit}.`);

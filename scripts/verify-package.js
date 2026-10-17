@@ -3,6 +3,7 @@ import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { basename, join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 const digest = (bytes) => createHash('sha256').update(bytes).digest('hex');
 const json = (path) => JSON.parse(readFileSync(path, 'utf8'));
@@ -47,7 +48,7 @@ export function verifyPackage(archivePath, root = process.cwd()) {
   return manifest;
 }
 
-if (import.meta.main) {
+if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   try {
     assert.equal(process.argv.length, 3, 'Usage: node scripts/verify-package.js PATH');
     verifyPackage(process.argv[2]);
