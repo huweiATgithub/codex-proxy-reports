@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { spawn, spawnSync } from 'node:child_process';
 import { createHash, randomBytes } from 'node:crypto';
 import { once } from 'node:events';
-import { createWriteStream, mkdtempSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { closeSync, mkdtempSync, mkdirSync, openSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { startUpstream } from '../tests/integration/upstream.js';
@@ -27,7 +27,7 @@ const pgPort = Number(options['postgres-port'] || 25439);
 const redisPort = Number(options['redis-port'] || 26389);
 const hostPort = Number(options.port || 4189);
 const base = `http://127.0.0.1:${hostPort}`;
-const password = 'reports-integration-only-0123456789abcdef';
+const password = randomBytes(24).toString('hex');
 const adminPassword = 'reports-integration-password-2026';
 const dockerArguments = options['docker-config'] ? ['--config', options['docker-config']] : [];
 const ownedContainers = [];
@@ -79,19 +79,30 @@ async function refreshView() {
   }, 'plugin management registration');
 }
 async function startHost() {
-  const log = createWriteStream(join(temporary, 'host.log'), { flags: 'a' });
+  const logPath = join(temporary, 'host.log');
+  const log = openSync(logPath, 'a');
   const environment = { ...process.env };
   for (const name of Object.keys(environment)) if (name.startsWith('CPR_')) delete environment[name];
-  host = spawn(resolve(options['host-binary']), ['serve'], { cwd: temporary, env: environment, stdio: ['ignore', 'pipe', 'pipe'] });
-  host.stdout.pipe(log); host.stderr.pipe(log);
-  await until(async () => { assert.equal(host.exitCode, null, `host exited; inspect ${temporary}/host.log`); await json('/api/auth/status'); }, 'host startup', 60000);
+  try {
+    host = spawn(resolve(options['host-binary']), ['serve'], { cwd: temporary, env: environment, stdio: ['ignore', log, log] });
+  } finally {
+    closeSync(log);
+  }
+  let spawnError;
+  host.once('error', (error) => { spawnError = error; });
+  await until(async () => {
+    if (spawnError || host.exitCode !== null || host.signalCode !== null) {
+      throw Object.assign(new Error(`Host startup failed (${spawnError?.message || `exit code ${host.exitCode}, signal ${host.signalCode || 'none'}`}); inspect ${logPath}`), { fatal: true });
+    }
+    await json('/api/auth/status');
+  }, 'host startup', 60000);
   const response = await fetch(base + '/api/auth/login', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ mode: 'admin', password: adminPassword }) });
   assert.equal(response.status, 200, await response.text());
   cookie = response.headers.get('set-cookie')?.split(';')[0];
   assert.ok(cookie, 'administrator session cookie');
 }
 async function stopHost() {
-  if (!host || host.exitCode !== null) return;
+  if (!host || host.exitCode !== null || host.signalCode !== null) return;
   const exited = once(host, 'exit'); host.kill('SIGTERM');
   const timer = setTimeout(() => host.kill('SIGKILL'), 10000);
   try { await exited; } finally { clearTimeout(timer); }
@@ -200,7 +211,7 @@ async function run() {
     redisPassword = options['redis-password'] || inspected.Config.Cmd[inspected.Config.Cmd.indexOf('--requirepass') + 1];
     effectiveRedisPort = Number(options['redis-port'] || inspected.NetworkSettings.Ports['6379/tcp'][0].HostPort);
   }
-  await until(() => docker(['exec', pgName, 'pg_isready', '-U', pgUser]), 'PostgreSQL startup');
+  await until(() => docker(['exec', pgName, 'pg_isready', '-h', '127.0.0.1', '-U', pgUser]), 'PostgreSQL startup');
   docker(['exec', '-i', pgName, 'psql', '-X', '-v', 'ON_ERROR_STOP=1', '-U', pgUser, '-d', 'postgres'], `CREATE DATABASE "${database}"`);
   databaseCreated = true;
   upstream = await startUpstream();
