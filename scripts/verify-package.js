@@ -34,7 +34,7 @@ export function verifyPackage(archivePath, root = process.cwd()) {
   for (const field of ['manifestVersion', 'publisher', 'name', 'version', 'main', 'runtime', 'engines']) {
     assert.deepEqual(manifest[field], source[field], `Packaged ${field} must match plugin.json`);
   }
-  assert.equal(manifest.package.protocolVersion, 4, 'Package protocol must match the v3.29 host');
+  assert.equal(manifest.package.protocolVersion, 5, 'Package protocol must match the v3.31 host');
   assert.deepEqual(manifest.package.target, { os: 'linux', architecture: 'x86_64' }, 'Package must target Linux x86_64');
   assert.deepEqual(Object.keys(manifest.resources).sort(), [...resources].sort(), 'Packaged resources must match management registration');
   assert.deepEqual(Object.keys(manifest.package.files).sort(), files, 'Package digests must cover exactly the binary and resources');

@@ -11,12 +11,12 @@ function fixture(t, mutate = () => {}) {
   const root = mkdtempSync(join(tmpdir(), 'reports-package-test-'));
   t.after(() => rmSync(root, { recursive: true, force: true }));
   for (const directory of ['dist/plugin', 'backend/target/release', 'archive']) mkdirSync(join(root, directory), { recursive: true });
-  const source = { manifestVersion: 2, publisher: 'huwei', name: 'usage-reports', version: '0.1.1', main: 'codex-proxy-reports', runtime: 'trustedProcess', engines: { 'codex-proxy-rs': '~3.29.0' }, resources: {} };
+  const source = { manifestVersion: 2, publisher: 'huwei', name: 'usage-reports', version: '0.1.1', main: 'codex-proxy-reports', runtime: 'trustedProcess', engines: { 'codex-proxy-rs': '~3.31.3' }, resources: {} };
   const contents = { 'codex-proxy-reports': Buffer.from('fixture executable'), 'app.js': Buffer.from('console.log("fixture");'), 'index.html': Buffer.from('<!doctype html>') };
   writeFileSync(join(root, 'plugin.json'), JSON.stringify(source));
   writeFileSync(join(root, 'dist/plugin/management.json'), JSON.stringify({ resources: [{ path: 'app.js' }, { path: 'index.html' }] }));
   for (const [name, bytes] of Object.entries(contents)) writeFileSync(join(root, name === source.main ? 'backend/target/release' : 'dist/plugin', name), bytes);
-  const manifest = { ...source, resources: { 'app.js': 'application/javascript', 'index.html': 'text/html' }, package: { protocolVersion: 4, target: { os: 'linux', architecture: 'x86_64' }, files: Object.fromEntries(Object.entries(contents).map(([name, bytes]) => [name, createHash('sha256').update(bytes).digest('hex')])) } };
+  const manifest = { ...source, resources: { 'app.js': 'application/javascript', 'index.html': 'text/html' }, package: { protocolVersion: 5, target: { os: 'linux', architecture: 'x86_64' }, files: Object.fromEntries(Object.entries(contents).map(([name, bytes]) => [name, createHash('sha256').update(bytes).digest('hex')])) } };
   mutate({ root, manifest, contents });
   for (const [name, bytes] of Object.entries(contents)) writeFileSync(join(root, 'archive', name), bytes);
   chmodSync(join(root, 'archive', source.main), 0o755);

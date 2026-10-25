@@ -2,10 +2,10 @@
 set -euo pipefail
 
 # Keep the acceptance host and packaging CLI on the plugin's SDK baseline.
-readonly host_version='3.29.0'
-readonly host_commit='45954899e53081a2e775fb9351e22908e85221c7'
-readonly host_sha256='0e1552e63252c817db9e9c20063d090efbb00a83ddc220b7a0d54a0251d07106'
-readonly source_sha256='1d76fb0b60ea6fcc72fa31ffe169dec48bdbac0e3f7b6b4321b91296d56d7afb'
+readonly host_version='3.31.3'
+readonly host_commit='e7e5b659cd4a8c8a7be2028ed52f27cbf7a526a9'
+readonly host_sha256='2e1de8dfcff82ef0adcb7e10e23171dce77a4960e0e020f01513d0814fd1f382'
+readonly source_sha256='e1e327edcc6e597b31c886a9a2c63f32b4c22b4c508f778fab8056e25e22e679'
 
 if [[ $# -ne 1 ]]; then
   printf 'Usage: bash scripts/prepare-host.sh OUTPUT_DIRECTORY\n' >&2

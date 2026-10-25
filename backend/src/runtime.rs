@@ -1,5 +1,6 @@
 //! 在宿主维护回调内分页扫描历史，保存任务与不可变报表
 use std::{
+    collections::{HashMap, VecDeque},
     sync::Arc,
     time::{Duration, Instant},
 };
@@ -9,7 +10,7 @@ use chrono::{DateTime, Utc};
 use gateway_plugin_sdk::{
     ErrorCode, PluginFault,
     call::{
-        host::{ClientKey, KeyListRequest, StateGetResult, StatePutResult},
+        host::{KeyListRequest, StateGetResult, StatePutResult},
         management::{ManagementRegistration, ManagementRequest, ManagementResponse},
         middleware::http::Version,
     },
@@ -81,15 +82,19 @@ enum Position {
         cursor: Option<String>,
     },
     History {
-        key: usize,
         page: u32,
         total: Option<u64>,
+    },
+    Records {
+        ids: VecDeque<String>,
+        next_page: Option<u32>,
+        total: u64,
     },
 }
 
 struct Scan {
     aggregate: Accumulator,
-    keys: Vec<ClientKey>,
+    keys: HashMap<String, usize>,
     position: Position,
 }
 
@@ -399,7 +404,7 @@ impl Runtime {
                 task_id: task.id.clone(),
                 scan: Scan {
                     aggregate: Accumulator::new(resolved),
-                    keys: vec![],
+                    keys: HashMap::new(),
                     position: Position::Directory { cursor: None },
                 },
             });
@@ -548,7 +553,7 @@ impl Runtime {
     }
 
     async fn step(&self, host: &HostClient, scan: &mut Scan) -> Result<bool> {
-        match &scan.position {
+        match &mut scan.position {
             Position::Directory { cursor } => {
                 let page = host
                     .list_keys(KeyListRequest {
@@ -563,14 +568,14 @@ impl Runtime {
                     bail!("Host Key directory did not advance");
                 }
                 for key in page.keys {
-                    if key.id.is_empty() || scan.keys.iter().any(|seen| seen.id == key.id) {
+                    if key.id.is_empty() || scan.keys.contains_key(&key.id) {
                         bail!("Host Key directory returned an invalid or repeated ID");
                     }
                     if key.name.trim().is_empty() {
                         continue;
                     }
-                    scan.aggregate.add_key(key.id.clone(), key.name.clone());
-                    scan.keys.push(key);
+                    let index = scan.aggregate.add_key(key.id.clone(), key.name);
+                    scan.keys.insert(key.id, index);
                 }
                 let mut state = self.state.lock().await;
                 if let Some(task) = &mut state.task {
@@ -582,18 +587,13 @@ impl Runtime {
                     };
                 } else {
                     scan.position = Position::History {
-                        key: 0,
                         page: 1,
                         total: None,
                     };
                 }
             }
-            Position::History { key, page, total } => {
-                let Some(client_key) = scan.keys.get(*key) else {
-                    return Ok(true);
-                };
-                let response =
-                    read_page(host, &client_key.id, *page, &scan.aggregate.resolved.bounds).await?;
+            Position::History { page, total } => {
+                let response = read_page(host, *page, &scan.aggregate.resolved.bounds).await?;
                 if response.current_page != *page
                     || response.page_size != 100
                     || response.items.len() > 100
@@ -610,32 +610,50 @@ impl Runtime {
                 }
                 let mut ids = std::collections::HashSet::new();
                 for record in &response.items {
-                    if !ids.insert(&record.id) {
-                        bail!("Repeated request in host history page");
+                    if record.id.is_empty() || !ids.insert(&record.id) {
+                        bail!("Invalid or repeated request in host history page");
                     }
-                    scan.aggregate.add_record(*key, record)?;
                 }
                 let done = offset + response.items.len() as u64 >= response.total;
+                scan.position = Position::Records {
+                    ids: response.items.into_iter().map(|record| record.id).collect(),
+                    next_page: if done {
+                        None
+                    } else {
+                        Some(page.checked_add(1).context("History page overflow")?)
+                    },
+                    total: response.total,
+                };
+            }
+            Position::Records {
+                ids,
+                next_page,
+                total,
+            } => {
+                if let Some(id) = ids.front() {
+                    let detail = read_record(host, id).await?;
+                    if let Some(key) = scan.keys.get(&detail.client_api_key_id) {
+                        scan.aggregate.add_record(*key, &detail.record)?;
+                    }
+                    ids.pop_front();
+                    let mut state = self.state.lock().await;
+                    if let Some(task) = &mut state.task {
+                        task.records_read += 1;
+                    }
+                    return Ok(false);
+                }
+                if let Some(page) = next_page {
+                    scan.position = Position::History {
+                        page: *page,
+                        total: Some(*total),
+                    };
+                    return Ok(false);
+                }
                 let mut state = self.state.lock().await;
                 if let Some(task) = &mut state.task {
-                    task.records_read += response.items.len() as u64;
-                    if done {
-                        task.keys_processed += 1;
-                    }
+                    task.keys_processed = scan.keys.len();
                 }
-                scan.position = if done {
-                    Position::History {
-                        key: *key + 1,
-                        page: 1,
-                        total: None,
-                    }
-                } else {
-                    Position::History {
-                        key: *key,
-                        page: page.checked_add(1).context("History page overflow")?,
-                        total: Some(response.total),
-                    }
-                };
+                return Ok(true);
             }
         }
         Ok(false)
@@ -645,32 +663,60 @@ impl Runtime {
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct Page {
-    items: Vec<UsageRecord>,
+    items: Vec<RecordId>,
     current_page: u32,
     page_size: u16,
     total: u64,
 }
 
 #[derive(Deserialize)]
-struct Envelope {
-    code: i32,
-    data: Page,
+struct RecordId {
+    id: String,
 }
 
-async fn read_page(host: &HostClient, key: &str, page: u32, bounds: &Bounds) -> Result<Page> {
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RecordDetail {
+    client_api_key_id: String,
+    #[serde(flatten)]
+    record: UsageRecord,
+}
+
+#[derive(Deserialize)]
+struct Envelope<T> {
+    code: i32,
+    data: T,
+}
+
+async fn read_page(host: &HostClient, page: u32, bounds: &Bounds) -> Result<Page> {
     let query = url::form_urlencoded::Serializer::new(String::new())
         .append_pair("status", "success")
-        .append_pair("clientApiKeyId", key)
         .append_pair("currentPage", &page.to_string())
         .append_pair("pageSize", "100")
         .append_pair("startTime", &bounds.start.to_rfc3339())
         .append_pair("endTime", &bounds.end.to_rfc3339())
         .finish();
+    read_history(host, format!("/api/admin/usage/records?{query}")).await
+}
+
+async fn read_record(host: &HostClient, id: &str) -> Result<RecordDetail> {
+    let query = url::form_urlencoded::Serializer::new(String::new())
+        .append_pair("id", id)
+        .finish();
+    let detail: RecordDetail =
+        read_history(host, format!("/api/admin/usage/records/detail?{query}")).await?;
+    if detail.record.id != id || detail.client_api_key_id.is_empty() {
+        bail!("Host history detail returned an invalid request or Key ID");
+    }
+    Ok(detail)
+}
+
+async fn read_history<T: DeserializeOwned>(host: &HostClient, uri: String) -> Result<T> {
     let mut response = host
         .dispatch_http(HttpRequest {
             settings: Value::Null,
             method: "GET".into(),
-            uri: format!("/api/admin/usage/records?{query}"),
+            uri,
             version: Version::Http11,
             headers: vec![],
             timeout_ms: Some(8000),
@@ -692,12 +738,12 @@ async fn read_page(host: &HostClient, key: &str, page: u32, bounds: &Bounds) -> 
         if let HttpFrame::Data(data) = frame {
             if bytes.len() + data.len() > 16 * 1024 * 1024 {
                 let _ = response.body.close().await;
-                bail!("Host history page exceeds 16 MiB");
+                bail!("Host history response exceeds 16 MiB");
             }
             bytes.extend(data);
         }
     }
-    let envelope: Envelope =
+    let envelope: Envelope<T> =
         serde_json::from_slice(&bytes).context("Invalid host history response")?;
     if envelope.code != 200 {
         bail!("Host history query failed");

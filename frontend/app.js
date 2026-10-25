@@ -159,7 +159,7 @@ function taskLabel(task) {
   return { queued: 'Waiting to start', running: 'Generating report', complete: task.report_id ? 'Report ready' : 'Completed — no report to save', failed: 'Generation failed', interrupted: 'Generation interrupted' }[task.state];
 }
 function progressLabel(task) {
-  return task.keys_total ? count(task.keys_processed) + ' of ' + count(task.keys_total) + ' Keys processed · ' + count(task.records_read) + ' records read' : 'Preparing…';
+  return task.keys_total || task.records_read ? count(task.keys_total) + ' Keys found · ' + count(task.records_read) + ' records read' : 'Preparing…';
 }
 function openTask() {
   state.taskId = state.task?.id || null;

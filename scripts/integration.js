@@ -220,7 +220,7 @@ async function run() {
   await startHost();
   pass('official host bootstrap, fresh PostgreSQL database and administrator authentication');
   const hostVersion = command(resolve(options['host-binary']), ['--version']);
-  assert.match(hostVersion, /3\.29\./);
+  assert.equal(hostVersion, '3.31.3');
   if (options['plugin-cli']) command(resolve(options['plugin-cli']), ['--version']);
   const archive = readFileSync(resolve(options.package));
   const packageSha256 = createHash('sha256').update(archive).digest('hex');
@@ -284,6 +284,8 @@ UPDATE model_requests SET started_at = ${literal(new Date(dayStart.getTime() - 1
 UPDATE model_requests SET attempt_count = 3 WHERE request_observation_json #>> '{request,userAgent}' = 'reports-integration/INTEGRATION-bulk-0';`);
   const emptyKeys = [];
   for (let offset = 0; offset < 103; offset += 10) emptyKeys.push(...await Promise.all(Array.from({ length: Math.min(10, 103 - offset) }, (_, index) => makeKey(`Reports empty ${offset + index}`))));
+  await json('/api/admin/client-keys/update', { id: primary.id, name: 'Reports renamed', groupIds: [], maxConcurrency: 0, requestsPerMinute: 0 });
+  await json('/api/admin/client-keys/update', { id: secondary.id, name: 'Reports primary', groupIds: [], maxConcurrency: 0, requestsPerMinute: 0 });
   pass('real upstream writes paginated success/failure history and a cancelled transport-incomplete stream, with native prewarm and timestamp fixtures');
   const configuration = { window: { kind: 'custom', start_date: day, end_date: day }, timezone: 'UTC', exclusions: { user_agent_patterns: ['^prompt'], models: ['codex-auto-review', 'gpt-5.6-luna'] } };
   await management('api/tasks', { ...configuration, exclusions: { user_agent_patterns: ['('], models: [] } }, 400);
@@ -308,8 +310,8 @@ UPDATE model_requests SET attempt_count = 3 WHERE request_observation_json #>> '
   assert.equal(saved.keys.length, 2);
   const first = saved.keys.find((key) => key.id === primary.id);
   const second = saved.keys.find((key) => key.id === secondary.id);
-  assert.equal(first.name, 'Reports primary');
-  assert.equal(second.name, 'Reports secondary');
+  assert.equal(first.name, 'Reports renamed');
+  assert.equal(second.name, 'Reports primary');
   const groups = (key) => [...key.groups].sort((left, right) => left.model.localeCompare(right.model) || left.reasoning_effort.localeCompare(right.reasoning_effort) || Number(left.is_subagent) - Number(right.is_subagent));
   assert.deepEqual(groups(first), groups({ groups: [
     { model: 'gpt-5.4', reasoning_effort: 'low', is_subagent: false, requests: 102 },
@@ -324,7 +326,7 @@ UPDATE model_requests SET attempt_count = 3 WHERE request_observation_json #>> '
   ] }));
   assert.ok(Buffer.byteLength(JSON.stringify(saved)) <= 48 * 1024);
   assert.equal((await management('api/reports')).reports.length, 1);
-  pass(`105-key directory and >100-record paging, host success classification, half-open UTC bounds, exact exclusions and groups (${completionMs} ms)`);
+  pass(`105-key directory and >100-record paging, Key renames and name reuse, host success classification, half-open UTC bounds, exact exclusions and groups (${completionMs} ms)`);
   for (let offset = 0; offset < emptyKeys.length; offset += 10) await Promise.all(emptyKeys.slice(offset, offset + 10).map((key) => json('/api/admin/client-keys/delete', { id: key.id })));
   const empty = await completeTask({ ...configuration, exclusions: { user_agent_patterns: ['.*'], models: [] } });
   assert.equal(empty.task.report_id, null);
@@ -359,7 +361,7 @@ UPDATE model_requests SET attempt_count = 3 WHERE request_observation_json #>> '
   assert.equal((await management('api/reports')).reports.length, 1);
   pass('restart marks unfinished task interrupted without publishing partial data');
   if (options.browser) await browserSmoke(saved);
-  const evidence = { hostVersion, hostCommit: options['host-commit'] || '45954899e53081a2e775fb9351e22908e85221c7', hostBinarySha256: createHash('sha256').update(readFileSync(resolve(options['host-binary']))).digest('hex'), packageSha256, completionMs, checks, report: saved, fixture: { requests: 117, directoryKeys: 105, successfulRecordsRead: 112, retainedRequests: 109, nativeDatabaseOverrides: ['prewarm request kind', 'boundary start timestamps', 'one logical request with three attempts'] }, screenshot: options.browser ? join(temporary, 'real-host-report.png') : null, hostUrl: base, pageUrl: `${base}/plugins/${instanceId}/${view.pages[0].id}` };
+  const evidence = { hostVersion, hostCommit: options['host-commit'] || 'e7e5b659cd4a8c8a7be2028ed52f27cbf7a526a9', hostBinarySha256: createHash('sha256').update(readFileSync(resolve(options['host-binary']))).digest('hex'), packageSha256, completionMs, checks, report: saved, fixture: { requests: 117, directoryKeys: 105, successfulRecordsRead: 112, retainedRequests: 109, nativeDatabaseOverrides: ['prewarm request kind', 'boundary start timestamps', 'one logical request with three attempts'] }, screenshot: options.browser ? join(temporary, 'real-host-report.png') : null, hostUrl: base, pageUrl: `${base}/plugins/${instanceId}/${view.pages[0].id}` };
   writeFileSync(join(temporary, 'result.json'), JSON.stringify(evidence, null, 2));
   console.log(`Evidence: ${temporary}`);
   if (options.keep) {

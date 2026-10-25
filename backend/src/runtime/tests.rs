@@ -44,6 +44,7 @@ struct MockStore {
     values: HashMap<(String, String), (Value, u64)>,
     keys: Vec<Value>,
     records: HashMap<String, Vec<Value>>,
+    missing_detail: Option<String>,
     bodies: HashMap<String, VecDeque<Vec<u8>>>,
     calls: Vec<(String, Value)>,
     failures: Vec<Failure>,
@@ -83,7 +84,7 @@ impl Failure {
                 .is_none_or(|value| params["value"]["state"] == value)
             && self
                 .page
-                .is_none_or(|value| query(params)["currentPage"] == value.to_string())
+                .is_none_or(|value| query(params).get("currentPage") == Some(&value.to_string()))
     }
 }
 
@@ -194,21 +195,46 @@ impl MockStore {
                 json!({"keys":self.keys[offset..end],"next_cursor":(end<self.keys.len()).then(||end.to_string())})
             }
             "host.http.dispatch" => {
+                let detail = params["uri"]
+                    .as_str()
+                    .unwrap()
+                    .starts_with("/api/admin/usage/records/detail?");
                 let params = query(params);
-                assert_eq!(params["status"], "success");
-                assert_eq!(params["pageSize"], "100");
-                assert_eq!(params["startTime"], "2026-10-01T00:00:00+00:00");
-                assert_eq!(params["endTime"], "2026-10-02T00:00:00+00:00");
-                let records = self
-                    .records
-                    .get(&params["clientApiKeyId"])
-                    .cloned()
-                    .unwrap_or_default();
-                let page = params["currentPage"].parse::<usize>().unwrap();
-                let start = ((page - 1) * 100).min(records.len());
-                let end = (start + 100).min(records.len());
+                let data = if detail {
+                    assert_eq!(params.len(), 1);
+                    if self.missing_detail.as_ref() == Some(&params["id"]) {
+                        return Err(injected());
+                    }
+                    let (key, record) = self
+                        .records
+                        .iter()
+                        .find_map(|(key, records)| {
+                            records
+                                .iter()
+                                .find(|record| record["id"] == params["id"])
+                                .map(|record| (key, record))
+                        })
+                        .ok_or_else(injected)?;
+                    let mut detail = record.clone();
+                    detail["clientApiKeyId"] = json!(key);
+                    detail
+                } else {
+                    // v3.31 rejects ID filters; list names are historical snapshots.
+                    assert_eq!(params.len(), 5);
+                    assert_eq!(params["status"], "success");
+                    assert_eq!(params["pageSize"], "100");
+                    assert_eq!(params["startTime"], "2026-10-01T00:00:00+00:00");
+                    assert_eq!(params["endTime"], "2026-10-02T00:00:00+00:00");
+                    let mut records: Vec<_> = self.records.values().flatten().collect();
+                    records.sort_by_key(|record| record["id"].as_str().unwrap());
+                    let page = params["currentPage"].parse::<usize>().unwrap();
+                    let start = ((page - 1) * 100).min(records.len());
+                    let end = (start + 100).min(records.len());
+                    json!({"items":records[start..end],"currentPage":page,"pageSize":100,"total":records.len()})
+                };
                 // 宿主 AdminEnvelope 的成功码为 200，不能使用常见的 0 约定。
-                let bytes = serde_json::to_vec(&json!({"code":200,"message":"OK","data":{"items":records[start..end],"currentPage":page,"pageSize":100,"total":records.len()}})).unwrap();
+                let bytes =
+                    serde_json::to_vec(&json!({"code":200,"message":"OK","data":data})).unwrap();
                 self.sequence += 1;
                 let handle = format!("body-{}", self.sequence);
                 self.bodies.insert(
@@ -511,7 +537,7 @@ async fn all_directory_and_history_pages_use_fixed_bounds_then_publish_aggregate
                 .iter()
                 .filter(|(method, _)| method == "host.http.dispatch")
                 .count(),
-            3
+            103
         );
         let puts = store
             .calls
@@ -534,6 +560,74 @@ async fn all_directory_and_history_pages_use_fixed_bounds_then_publish_aggregate
         assert!(report_position < index_position && index_position < complete_position);
         assert_eq!(puts.last().unwrap()["expected_version"], 2);
     }
+    harness.shutdown().await;
+}
+
+#[tokio::test]
+async fn renamed_keys_and_reused_names_keep_their_ids_and_unavailable_keys_are_skipped() {
+    let mut store = MockStore::fixture();
+    store.keys[0]["name"] = json!("Renamed");
+    store
+        .keys
+        .push(json!({"id":"key-2","name":"Old name","enabled":false}));
+    store.records.get_mut("key-1").unwrap()[0]["clientApiKeyName"] = json!("Old name");
+    store
+        .records
+        .insert("key-2".into(), vec![row("request-2"), row("request-3")]);
+    store
+        .records
+        .insert("deleted-key".into(), vec![row("request-4")]);
+    let store = shared(store);
+    let mut harness = Harness::new(store.clone()).await;
+    harness.submit().await;
+    harness.reconcile().await;
+    let task = harness.task().await;
+    assert_eq!(task["state"], "complete");
+    assert_eq!(task["records_read"], 4);
+    {
+        let store = store.lock().unwrap();
+        let keys = store
+            .value("reports", task["report_id"].as_str().unwrap())
+            .unwrap()["keys"]
+            .as_array()
+            .unwrap();
+        assert_eq!(keys.len(), 2);
+        assert_eq!(keys[0]["id"], "key-1");
+        assert_eq!(keys[0]["name"], "Renamed");
+        assert_eq!(keys[0]["groups"][0]["requests"], 1);
+        assert_eq!(keys[1]["id"], "key-2");
+        assert_eq!(keys[1]["name"], "Old name");
+        assert_eq!(keys[1]["groups"][0]["requests"], 2);
+    }
+    harness.shutdown().await;
+}
+
+#[tokio::test]
+async fn detail_disappearing_after_listing_fails_without_publishing_partial_counts() {
+    let mut store = MockStore::fixture();
+    store
+        .records
+        .get_mut("key-1")
+        .unwrap()
+        .push(row("request-2"));
+    store.missing_detail = Some("request-2".into());
+    let store = shared(store);
+    let mut harness = Harness::new(store.clone()).await;
+    harness.submit().await;
+    harness.reconcile().await;
+    let task = harness.task().await;
+    assert_eq!(task["state"], "failed");
+    assert_eq!(task["records_read"], 1);
+    assert!(task["report_id"].is_null());
+    assert!(harness.runtime.state.lock().await.scan.is_none());
+    assert!(
+        !store
+            .lock()
+            .unwrap()
+            .values
+            .keys()
+            .any(|(namespace, _)| namespace == "reports")
+    );
     harness.shutdown().await;
 }
 
@@ -579,7 +673,7 @@ async fn read_failure_discards_partial_aggregates_and_never_retries_itself() {
                 .iter()
                 .filter(|(method, _)| method == "host.http.dispatch")
                 .count(),
-            2
+            102
         );
     }
     harness.shutdown().await;
@@ -948,7 +1042,7 @@ async fn uncertain_submission_is_recovered_by_a_later_callback_without_duplicate
                 .iter()
                 .filter(|(method, _)| method == "host.http.dispatch")
                 .count(),
-            1
+            2
         );
         assert_eq!(
             store.value("control", "index").unwrap()["reports"]
@@ -1007,7 +1101,7 @@ async fn uncommitted_uncertain_submission_does_not_block_a_fresh_submission() {
                 .iter()
                 .filter(|(method, _)| method == "host.http.dispatch")
                 .count(),
-            1
+            2
         );
         let submissions: Vec<_> = store
             .calls
@@ -1073,7 +1167,7 @@ async fn running_save_recovers_after_both_ack_and_immediate_read_are_unavailable
             .iter()
             .filter(|(method, _)| method == "host.http.dispatch")
             .count(),
-        1
+        2
     );
     harness.shutdown().await;
 }

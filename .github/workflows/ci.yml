@@ -62,7 +62,7 @@ jobs:
         run: npx playwright test
       - name: Prepare the matching host and packaging CLI
         id: host
-        run: bash scripts/prepare-host.sh "$RUNNER_TEMP/host-v3.29.0"
+        run: bash scripts/prepare-host.sh "$RUNNER_TEMP/host-v3.31.3"
       - name: Build and package the plugin
         env:
           CPR_PLUGIN: ${{ steps.host.outputs.plugin-cli }}
@@ -77,7 +77,7 @@ jobs:
           test "$(printf '%s\n' "$maximum" '2.34' | sort -V | tail -n 1)" = '2.34'
           cd dist/packages
           sha256sum "$ARCHIVE" "$ARCHIVE.sha256" > SHA256SUMS
-      - name: Install and test the exact package on host v3.29.0
+      - name: Install and test the exact package on host v3.31.3
         env:
           HOST_BINARY: ${{ steps.host.outputs.host-binary }}
           HOST_WEB: ${{ steps.host.outputs.host-web }}
@@ -115,6 +115,6 @@ jobs:
         env:
           VERSION: ${{ steps.version.outputs.version }}
         run: |
-          printf 'Tested **%s**, Linux x86_64 GNU, host **v3.29.0**.\n\n' "$VERSION" >> "$GITHUB_STEP_SUMMARY"
+          printf 'Tested **%s**, Linux x86_64 GNU, host **v3.31.3**.\n\n' "$VERSION" >> "$GITHUB_STEP_SUMMARY"
           printf 'Rust, JavaScript, browser, package integrity and real-host acceptance checks passed.\n\n' >> "$GITHUB_STEP_SUMMARY"
           cat dist/packages/SHA256SUMS >> "$GITHUB_STEP_SUMMARY"

@@ -96,11 +96,13 @@ jobs:
       - name: Prepare release notes
         run: |
           cat > "$RUNNER_TEMP/release-notes.md" <<EOF_NOTES
-          Usage reports **$VERSION** for **codex-proxy-rs v3.29.x**.
+          Usage reports **$VERSION** for **codex-proxy-rs v3.31.3 or a later v3.31.x patch**.
+
+          Uses plugin protocol v5 and the current usage list/detail APIs, preserving stable Key grouping after renames and name reuse. Report generation reads one detail per successful request.
 
           Install \`$ARCHIVE\` through the host plugin manager. Linux x86_64 GNU, glibc 2.34 or newer. No instance configuration or middleware binding is required.
 
-          This exact package passed Rust, JavaScript, browser and real-host v3.29.0 acceptance tests. SHA256 checksums and GitHub build provenance accompany the package.
+          This exact package passed Rust, JavaScript, browser and real-host v3.31.3 acceptance tests. SHA256 checksums and GitHub build provenance accompany the package.
 
           Verify provenance with \`gh attestation verify $ARCHIVE --repo $GH_REPO\`.
           EOF_NOTES
