@@ -1,10 +1,10 @@
 # Codex Proxy Reports
 
-A standalone `codex-proxy-rs` plugin for Client Key usage-distribution reports, targeting **`~3.31.3`**. It includes a Rust backend, an embedded admin page with browser SVG charts, and a synthetic visual reference.
+A standalone `codex-proxy-rs` plugin for Client Key usage-distribution reports, targeting **`~3.41.2`**. It includes a Rust backend, an embedded admin page with browser SVG charts, and a synthetic visual reference.
 
 The plugin provides an embedded admin page with explicit report submission and historical report viewing. The host owns request history and the successful-usage definition. The plugin backend filters and aggregates requests, runs one report task at a time, and saves aggregate counts; the frontend calculates percentages and renders the report and charts. It uses existing host capabilities without host changes or database credentials.
 
-Build with Node.js 24+, Rust 1.99.1, and the host v3.31.3 packaging CLI (`cpr-plugin`):
+Build with Node.js 24+, Rust 1.99.1, and the host v3.41.2 packaging CLI (`cpr-plugin`):
 
 ```sh
 npm ci
@@ -12,11 +12,11 @@ npm run plugin:build
 CPR_PLUGIN=/path/to/cpr-plugin npm run plugin:package
 ```
 
-The default output is `dist/packages/huwei.usage-reports-0.1.3-x86_64-unknown-linux-gnu.tar.gz` with a SHA256 file. Install this archive through the host plugin manager and open **Usage reports**. The plugin requires no instance configuration or request middleware bindings. Set `REPORTS_BINARY` and `REPORTS_TARGET` when packaging a binary built for another supported platform.
+The default output is `dist/packages/huwei.usage-reports-0.1.4-x86_64-unknown-linux-gnu.tar.gz` with a SHA256 file. Install this archive through the host plugin manager and open **Usage reports**. The plugin requires no instance configuration or request middleware bindings. Set `REPORTS_BINARY` and `REPORTS_TARGET` when packaging a binary built for another supported platform.
 
-CI runs Rust formatting, Clippy, backend tests, JavaScript tests, browser tests, and installation/acceptance on the official host v3.31.3. The [Release workflow](.github/workflows/release.yml) runs when a version tag is pushed. Run `npm run version:set -- X.Y.Z` with a new stable version, commit the updated version files, create the matching annotated tag `vX.Y.Z`, then push `main` and the tag with `git push --atomic origin main vX.Y.Z`. The workflow checks that the tagged commit belongs to `main`, tests the exact Linux x86_64 package, uploads it with checksums and signed provenance, then verifies public downloads. Existing releases are never overwritten. The [CI workflow](.github/workflows/ci.yml) also runs for pushes to `main` and pull requests.
+CI runs Rust formatting, Clippy, backend tests, JavaScript tests, browser tests, and installation/acceptance on the official host v3.41.2. The [Release workflow](.github/workflows/release.yml) runs when a version tag is pushed. Run `npm run version:set -- X.Y.Z` with a new stable version, commit the updated version files, create the matching annotated tag `vX.Y.Z`, then push `main` and the tag with `git push --atomic origin main vX.Y.Z`. The workflow checks that the tagged commit belongs to `main`, tests the exact Linux x86_64 package, uploads it with checksums and signed provenance, then verifies public downloads. Existing releases are never overwritten. The [CI workflow](.github/workflows/ci.yml) also runs for pushes to `main` and pull requests.
 
-Run `npm run demo` and open `http://127.0.0.1:4173/` to try the interface with synthetic data. The demo opens on Reports with synthetic examples ready to browse. New report opens a two-step Configure → Review wizard; generation progress and report reading have separate views. It also supports configuration reuse, host theme synchronization, and chart enlargement. It does not read host history. Run backend checks with `cargo test --manifest-path backend/Cargo.toml --locked`, chart checks with `npm test`, and browser checks with `npm run test:ui` (install Chromium with `npx playwright install chromium`). For isolated host acceptance, run `npm run test:integration -- --host-binary /path/to/codex-proxy-rs --host-web /path/to/web/dist --package dist/packages/huwei.usage-reports-0.1.3-x86_64-unknown-linux-gnu.tar.gz --browser`; this starts disposable PostgreSQL and Redis containers and removes its test services afterward.
+Run `npm run demo` and open `http://127.0.0.1:4173/` to try the interface with synthetic data. The demo opens on Reports with synthetic examples ready to browse. New report opens a two-step Configure → Review wizard; generation progress and report reading have separate views. It also supports configuration reuse, host theme synchronization, and chart enlargement. It does not read host history. Run backend checks with `cargo test --manifest-path backend/Cargo.toml --locked`, chart checks with `npm test`, and browser checks with `npm run test:ui` (install Chromium with `npx playwright install chromium`). For isolated host acceptance, run `npm run test:integration -- --host-binary /path/to/codex-proxy-rs --host-web /path/to/web/dist --package dist/packages/huwei.usage-reports-0.1.4-x86_64-unknown-linux-gnu.tar.gz --browser`; this starts disposable PostgreSQL and Redis containers and removes its test services afterward.
 
 - [Data collection](#data-collection)
 - [Visualization logic](#visualization-logic)
@@ -28,30 +28,30 @@ Run `npm run demo` and open `http://127.0.0.1:4173/` to try the interface with s
 
 ### Read existing host history
 
-The SDK and packaging baseline is upstream **v3.31.3**, commit [`e7e5b659cd4a8c8a7be2028ed52f27cbf7a526a9`](https://github.com/zyycn/codex-proxy-rs/tree/e7e5b659cd4a8c8a7be2028ed52f27cbf7a526a9). The manifest requires v3.31.3 or a later v3.31.x patch. Management uses capability v2; maintenance uses v1; the SDK and CLI use process protocol v5.
+The SDK and packaging baseline is upstream **v3.41.2**, commit [`ba3baddbda7293d1d76ea066dd5e42298618c15a`](https://github.com/zyycn/codex-proxy-rs/tree/ba3baddbda7293d1d76ea066dd5e42298618c15a). The manifest requires v3.41.2 or a later v3.41.x patch. Management uses capability v2; maintenance uses v1; the SDK and CLI use process protocol v7.
 
-A plugin can call the existing admin endpoint through `HostClient::dispatch_http`, which uses the host's internal routing and plugin identity. The page calls its own registered plugin management routes through the page bridge. See the [host HTTP dispatch and management-page contracts](https://github.com/zyycn/codex-proxy-rs/blob/e7e5b659cd4a8c8a7be2028ed52f27cbf7a526a9/backend/crates/gateway-plugin/sdk/docs/capabilities.md).
+The backend uses `HostClient::scan_usage_records` to read native request facts from one read-only database snapshot. The page calls its own registered plugin management routes through the page bridge. See the [host usage-reading contract](https://github.com/zyycn/codex-proxy-rs/blob/ba3baddbda7293d1d76ea066dd5e42298618c15a/backend/crates/gateway-plugin/sdk/docs/usage-data.md).
 
 ```text
 Plugin page → confirm configuration → submit report task
 
 Host maintenance callback
-  → HostClient::dispatch_http
-  → GET /api/admin/usage/records
-  → GET /api/admin/usage/records/detail for each successful request
-  → filter and aggregate request counts
+  → host.keys.list for stable IDs and current names
+  → HostClient::scan_usage_records for the fixed UTC window
+  → UsageReader::next_batch until complete
+  → apply host usage eligibility, exclusions and grouping
   → save completed report data in host.state
 
 Plugin page → poll task → read saved report data → render report and charts
 ```
 
-The list endpoint accepts `status=success`, explicit `startTime` / `endTime`, `currentPage`, and `pageSize`. Scan all successful requests in the window, then read `/api/admin/usage/records/detail?id=…` for each request. Details provide `clientApiKeyId`, the model fields, `reasoningEffort`, `subagentKind`, and `userAgent`. Associate that stable Key ID with the current name from `host.keys.list`; a renamed Key retains its history, and reusing an old name does not reassign that history. The list's `clientApiKeyName` is a historical name, and its name filter uses substring matching, so neither determines report grouping. See the [query fields](https://github.com/zyycn/codex-proxy-rs/blob/e7e5b659cd4a8c8a7be2028ed52f27cbf7a526a9/backend/crates/gateway-api/src/admin/observability/query.rs) and [response fields](https://github.com/zyycn/codex-proxy-rs/blob/e7e5b659cd4a8c8a7be2028ed52f27cbf7a526a9/backend/crates/gateway-api/src/admin/observability/wire.rs).
+Each fact provides the stable `client_key_ref`, actual/requested models, `reasoning_effort`, `subagent_kind`, `user_agent`, and host-derived `usage_counted`. Only usage-counted facts enter report filtering and grouping. Associate the stable Key ID with its current name from `host.keys.list`; renaming a Key retains its history, and reusing an old name does not reassign that history. Facts belonging to deleted or unnamed Keys are skipped.
 
-The typed `usage.records.list` service does not expose all the request metadata required by this report. Also, `usage.aggregates.list` reads caller-maintained aggregate contributions; it is not a grouped query over all native request history. Their [record](https://github.com/zyycn/codex-proxy-rs/blob/e7e5b659cd4a8c8a7be2028ed52f27cbf7a526a9/backend/crates/gateway-plugin/sdk/src/call/services/usage/record.rs) and [aggregate](https://github.com/zyycn/codex-proxy-rs/blob/e7e5b659cd4a8c8a7be2028ed52f27cbf7a526a9/backend/crates/gateway-plugin/sdk/src/call/services/usage/aggregate.rs) contracts should not be treated as a complete replacement for the admin endpoint.
+The host also offers `query_usage_statistics` for model, Key, Key/model and routing-group totals. Those groups cannot express this report's user-agent exclusions, reasoning-effort dimension or Subagent overlays, so the plugin aggregates the narrow request facts locally.
 
-The reader scans retained host history afresh for each generation. Keep at most one page of pending request IDs, read each detail within the active maintenance callback, and discard it after aggregation. Working memory holds the scan position, Key directory, pending IDs, and aggregate counts; do not cache request history or reuse earlier reports as inputs to a new scan. No request-observation middleware, independent request database, or production database credential is needed.
+The reader scans retained host history afresh for each generation. Consume one batch at a time and discard facts after aggregation. Working memory holds the Key directory, current batch and aggregate counts; no request history is cached. The reader belongs to its opening maintenance call and is never resumed in a later callback. No request-observation middleware, independent request database, or production database credential is needed.
 
-Use `pageSize=100`, the endpoint's maximum. The [observability page-size type](https://github.com/zyycn/codex-proxy-rs/blob/e7e5b659cd4a8c8a7be2028ed52f27cbf7a526a9/backend/crates/gateway-admin/src/model/observability.rs#L13-L26) fixes this limit in host code; it is not a deployment setting. Raising it requires a host change and is outside the first version.
+The host returns at most **1,024 facts or 2 MiB per batch**, with no 100-record admin-page limit. One open call and subsequent `next_batch` calls share the same snapshot. Early termination closes the reader; ending the parent call also releases it. The snapshot holds a database connection and is bounded by the host's observability timeout, which defaults to **120 seconds**; a timeout fails the task without publishing partial results.
 
 A complete sequential read measured on 2026-10-17 against host v3.28.0 scanned **63,345 successful requests across six Keys in 637 pages**, taking **61.96 seconds**. The probe called the admin endpoint on the host container network and aggregated pages as they arrived; it did not include plugin RPC, report persistence, or browser rendering. This is measurement evidence for asynchronous submission, not a plugin completion-time guarantee.
 
@@ -59,12 +59,12 @@ Report generation follows this lifecycle:
 
 1. Choose **New report**, configure the time range, timezone, and exclusions, then review the complete configuration and inclusion of all Keys. Only **Confirm and generate** submits a task; browsing reports, opening the wizard, or editing settings does not generate one.
 2. Allow at most **one unfinished task per plugin instance**, shared by all page sessions. Reject another submission while it is busy; there is no task queue.
-3. Accept the submission promptly and process pages in chunks during the existing `maintenance` / `plugin.reconcile` callback. Finish each chunk within the host's 30-second call deadline. Host callbacks belong to the active parent call, so the backend must not keep using its `HostClient` after that call returns.
-4. The frontend polls about every two seconds. Reports home shows the current or latest generation; its dedicated progress view displays task state, Keys found, and records read. Completion offers **View report** without changing the view automatically. Closing the browser does not stop the task while the host and plugin remain running.
-5. Treat history as unchanged for the duration of a scan. Any data-read failure fails the whole task, reports the error, and discards partial aggregates. Do not publish a partial report or automatically restart a failed task.
+3. Accept the submission promptly and consume the complete snapshot during one `maintenance` / `plugin.reconcile` callback. The plugin declares a 180-second maintenance budget and reserves the last five seconds for reader cleanup and saving the result. Host callbacks and readers belong to the active parent call.
+4. The frontend polls about every two seconds. Reports home shows the current or latest generation; its dedicated progress view displays task state, Keys found, and facts read (including facts excluded by the host usage policy). Completion offers **View report** without changing the view automatically. Closing the browser does not stop the task while the host and plugin remain running.
+5. Read a fixed snapshot, so concurrent history updates do not shift pages or alter already-opened results. Any data-read failure fails the whole task, reports the error, and discards partial aggregates. Do not publish a partial report or automatically restart a failed task.
 6. Save a successful, nonempty report before marking the task complete. An empty result completes without a report entry. After a plugin restart, mark any unfinished task as interrupted; a new submission starts from the beginning.
 
-The inspected [maintenance scheduler](https://github.com/zyycn/codex-proxy-rs/blob/e7e5b659cd4a8c8a7be2028ed52f27cbf7a526a9/backend/crates/gateway-plugin/runtime/src/generation/prepare/maintenance.rs) normally waits 30 seconds after a callback finishes before starting the next one. This reader performs one detail query per successful request in addition to list pagination, so the earlier list-only measurement does not predict its completion time. Real-host acceptance records elapsed generation time; synthetic Demo timing does not measure host queries.
+The [maintenance scheduler](https://github.com/zyycn/codex-proxy-rs/blob/ba3baddbda7293d1d76ea066dd5e42298618c15a/backend/crates/gateway-plugin/runtime/src/generation/prepare/maintenance.rs) normally waits 30 seconds after a callback finishes before starting the next one. Submission can therefore wait for the next callback before scanning begins. Real-host acceptance records elapsed generation time; synthetic Demo timing does not measure host queries.
 
 Use the host's existing `host.state.get/put/delete` storage for the current task status, a small report index, and one compact JSON record per completed report. Follow its versioned-write contract. No separate database or persistent image files are required.
 
@@ -76,17 +76,17 @@ Use the host's existing `host.state.get/put/delete` storage for the current task
 
 Store integer request counts for all groups before Top 5 / Others selection. Do not store raw request records, per-request metadata, precomputed percentages, generated HTML, or PNG/SVG output. Completed report data is fixed; the current frontend renderer uses it when the report is opened. Layout, colors, and sector selection can change without rereading history. Changing the time window or exclusions requires a new generation.
 
-Retain the latest **20** successful, nonempty reports. Publish a new report only after its data is saved, then remove the oldest excess report. Limit each report's serialized JSON to **48 KiB**; fail explicitly if it exceeds the limit rather than dropping groups. This leaves room inside the host's [64 KiB RPC metadata limit](https://github.com/zyycn/codex-proxy-rs/blob/e7e5b659cd4a8c8a7be2028ed52f27cbf7a526a9/backend/crates/gateway-plugin/sdk/src/client/frame.rs#L7), which also carries `host.state` JSON values.
+Retain the latest **20** successful, nonempty reports. Publish a new report only after its data is saved, then remove the oldest excess report. Limit each report's serialized JSON to **48 KiB**; fail explicitly if it exceeds the limit rather than dropping groups. This is the plugin's compact-report storage policy, also declared in `plugin.json`, rather than the host's maximum value size.
 
 ### Counting and grouping
 
-Select requests by their **start time**. The default window is the last **7 × 24 hours**, expressed as UTC `[start, end)`. On confirmed submission, resolve both timestamps once and reuse them across every page and Key. Display the effective window and selected timezone with the report.
+Select requests by their **start time**. The default window is the last **7 × 24 hours**, expressed as UTC `[start, end)`. On confirmed submission, resolve both timestamps once at millisecond precision and reuse them across every batch and Key. Display the effective window and selected timezone with the report.
 
 A custom range uses calendar start and end dates, inclusive in the selected timezone. Convert local midnight at the start date and local midnight on the day after the end date into UTC `[start, end)`. Use the timezone's calendar rules, including daylight-saving transitions; a calendar day need not contain 24 hours.
 
 Include all Keys returned by the host, in host order, with no Key selector. Read all pages of the Key directory. Use stable IDs to associate records with Keys; skip a chart when a Key ID cannot be mapped to a name, including an unavailable deleted Key. A Key with no retained requests produces no chart. If no charts remain, produce **zero images and zero reports**, with no report or chart placeholder taking up space and no new historical report entry; task status may still indicate successful completion with no result.
 
-Use the host's successful-usage classification: one successfully delivered logical request counts once. Upstream retry attempts do not add requests. Prewarm, failed, cancelled, incomplete, and running requests are excluded. Compaction, memory, and image requests remain eligible when they satisfy the same host definition and report exclusions. This is a request-count distribution, not a Token or cost distribution. The host's [success filter](https://github.com/zyycn/codex-proxy-rs/blob/e7e5b659cd4a8c8a7be2028ed52f27cbf7a526a9/backend/crates/gateway-store/src/postgres/observability/queries/usage.rs) owns that classification.
+Use the host's successful-usage classification: one successfully delivered logical request counts once. Upstream retry attempts do not add requests. Prewarm, failed, cancelled, incomplete, and running requests are excluded. Compaction, memory, and image requests remain eligible when they satisfy the same host definition and report exclusions. This is a request-count distribution, not a Token or cost distribution. The host's [success filter](https://github.com/zyycn/codex-proxy-rs/blob/ba3baddbda7293d1d76ea066dd5e42298618c15a/backend/crates/gateway-store/src/postgres/observability/queries/usage.rs) owns that classification.
 
 | Dimension | Interpretation |
 | --- | --- |
@@ -148,7 +148,7 @@ Compile configured regexes before scanning. Invalid expressions reject generatio
 
 The frontend builds the report page and draws charts from saved aggregate counts. The backend does not render images or require an SVG drawing library. The plugin uses native browser SVG for sectors, labels, and translucent raised overlays, with no chart library or external resources.
 
-Third-party JS libraries may be bundled with the plugin. Register their static resources in both the manifest and management-page registration; compile dependencies to classic script bundles, such as IIFE or UMD. The inspected host rejects `<script type="module">`, blocks CDN and other external resource loading, and permits at most **1 MiB per resource** and **8 MiB in total**. See the [page resource loader and script policy](https://github.com/zyycn/codex-proxy-rs/blob/e7e5b659cd4a8c8a7be2028ed52f27cbf7a526a9/frontend/src/views/plugins/management/frame.ts). Fetch report data through the host page bridge's registered plugin routes.
+Third-party JS libraries may be bundled with the plugin. Register their static resources in both the manifest and management-page registration; compile dependencies to classic script bundles, such as IIFE or UMD. The inspected host rejects `<script type="module">`, blocks CDN and other external resource loading, and permits at most **1 MiB per resource** and **8 MiB in total**. See the [page resource loader and script policy](https://github.com/zyycn/codex-proxy-rs/blob/ba3baddbda7293d1d76ea066dd5e42298618c15a/frontend/src/views/plugins/management/frame.ts). Fetch report data through the host page bridge's registered plugin routes.
 
 ### Chart type and sector count
 
@@ -332,5 +332,5 @@ Edit `reference/config.json` and rerun to exercise configurable exclusions. `sam
 
 ## Deferred and to discuss
 
-- **Downloads:** omit plugin PNG/SVG/CSV download controls for now, and make no host changes to enable them. The inspected [plugin iframe](https://github.com/zyycn/codex-proxy-rs/blob/e7e5b659cd4a8c8a7be2028ed52f27cbf7a526a9/frontend/src/views/plugins/components/PluginManagementFrame.vue) permits scripts but not ordinary downloads. Any later download support is a separate discussion
-- **Demo and acceptance:** use `npm run demo` for visual review of overlays, labels, responsive layout, enlargement, empty results, and themes. Visual acceptance remains with the user. `scripts/integration.js` verifies the packaged plugin on an isolated v3.31 host and records generation time; synthetic fixture timing does not predict production scans
+- **Downloads:** omit plugin PNG/SVG/CSV download controls for now, and make no host changes to enable them. The inspected [plugin iframe](https://github.com/zyycn/codex-proxy-rs/blob/ba3baddbda7293d1d76ea066dd5e42298618c15a/frontend/src/views/plugins/components/PluginManagementFrame.vue) permits scripts but not ordinary downloads. Any later download support is a separate discussion
+- **Demo and acceptance:** use `npm run demo` for visual review of overlays, labels, responsive layout, enlargement, empty results, and themes. Visual acceptance remains with the user. `scripts/integration.js` verifies the packaged plugin on an isolated v3.41 host and records generation time; synthetic fixture timing does not predict production scans

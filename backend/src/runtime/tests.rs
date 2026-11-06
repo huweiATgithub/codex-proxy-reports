@@ -1,4 +1,4 @@
-//! 通过真实 SDK 双工会话验证任务互斥、宿主分页与版本化发布，不连接生产宿主。
+//! 通过真实 SDK 双工会话验证任务互斥、宿主快照扫描与版本化发布，不连接生产宿主。
 
 use super::*;
 use std::{
@@ -44,8 +44,10 @@ struct MockStore {
     values: HashMap<(String, String), (Value, u64)>,
     keys: Vec<Value>,
     records: HashMap<String, Vec<Value>>,
-    missing_detail: Option<String>,
-    bodies: HashMap<String, VecDeque<Vec<u8>>>,
+    readers: HashMap<String, VecDeque<Value>>,
+    batch_size: usize,
+    clear_after_open: bool,
+    stall_next: bool,
     calls: Vec<(String, Value)>,
     failures: Vec<Failure>,
     key_page_size: usize,
@@ -57,7 +59,6 @@ struct Failure {
     namespace: Option<&'static str>,
     key: Option<&'static str>,
     state: Option<&'static str>,
-    page: Option<u32>,
     after_commit: bool,
 }
 
@@ -68,7 +69,6 @@ impl Failure {
             namespace: Some("control"),
             key: Some(key),
             state: None,
-            page: None,
             after_commit: false,
         }
     }
@@ -82,22 +82,7 @@ impl Failure {
             && self
                 .state
                 .is_none_or(|value| params["value"]["state"] == value)
-            && self
-                .page
-                .is_none_or(|value| query(params).get("currentPage") == Some(&value.to_string()))
     }
-}
-
-fn query(params: &Value) -> HashMap<String, String> {
-    let uri = params["uri"].as_str().unwrap_or_default();
-    url::form_urlencoded::parse(
-        uri.split_once('?')
-            .map(|(_, query)| query)
-            .unwrap_or_default()
-            .as_bytes(),
-    )
-    .into_owned()
-    .collect()
 }
 
 fn injected() -> PluginFault {
@@ -108,6 +93,7 @@ impl MockStore {
     fn fixture() -> Self {
         let mut mock = Self {
             key_page_size: 100,
+            batch_size: 1024,
             ..Self::default()
         };
         mock.keys
@@ -194,75 +180,52 @@ impl MockStore {
                 let end = (offset + limit).min(self.keys.len());
                 json!({"keys":self.keys[offset..end],"next_cursor":(end<self.keys.len()).then(||end.to_string())})
             }
-            "host.http.dispatch" => {
-                let detail = params["uri"]
-                    .as_str()
-                    .unwrap()
-                    .starts_with("/api/admin/usage/records/detail?");
-                let params = query(params);
-                let data = if detail {
-                    assert_eq!(params.len(), 1);
-                    if self.missing_detail.as_ref() == Some(&params["id"]) {
-                        return Err(injected());
-                    }
-                    let (key, record) = self
-                        .records
-                        .iter()
-                        .find_map(|(key, records)| {
-                            records
-                                .iter()
-                                .find(|record| record["id"] == params["id"])
-                                .map(|record| (key, record))
-                        })
-                        .ok_or_else(injected)?;
-                    let mut detail = record.clone();
-                    detail["clientApiKeyId"] = json!(key);
-                    detail
-                } else {
-                    // v3.31 rejects ID filters; list names are historical snapshots.
-                    assert_eq!(params.len(), 5);
-                    assert_eq!(params["status"], "success");
-                    assert_eq!(params["pageSize"], "100");
-                    assert_eq!(params["startTime"], "2026-10-01T00:00:00+00:00");
-                    assert_eq!(params["endTime"], "2026-10-02T00:00:00+00:00");
-                    let mut records: Vec<_> = self.records.values().flatten().collect();
-                    records.sort_by_key(|record| record["id"].as_str().unwrap());
-                    let page = params["currentPage"].parse::<usize>().unwrap();
-                    let start = ((page - 1) * 100).min(records.len());
-                    let end = (start + 100).min(records.len());
-                    json!({"items":records[start..end],"currentPage":page,"pageSize":100,"total":records.len()})
-                };
-                // 宿主 AdminEnvelope 的成功码为 200，不能使用常见的 0 约定。
-                let bytes =
-                    serde_json::to_vec(&json!({"code":200,"message":"OK","data":data})).unwrap();
+            "host.usage.records.scan" => {
+                assert_eq!(params["filter"]["records"]["start_ms"], 1790812800000_i64);
+                assert_eq!(params["filter"]["records"]["end_ms"], 1790899200000_i64);
+                assert!(params["filter"]["records"]["client_key_ref"].is_null());
+                assert!(params["batch_size"].is_null());
+                let mut records: Vec<_> = self
+                    .records
+                    .iter()
+                    .flat_map(|(key, records)| records.iter().map(|record| fact(key, record)))
+                    .collect();
+                records.sort_by_key(|record| record["value"]["id"].as_str().unwrap().to_owned());
                 self.sequence += 1;
-                let handle = format!("body-{}", self.sequence);
-                self.bodies.insert(
-                    handle.clone(),
-                    bytes
-                        .chunks(16 * 1024)
-                        .map(|chunk| chunk.to_vec())
-                        .collect(),
-                );
-                json!({"status":200,"version":"HTTP/1.1","headers":[],"body":{"kind":"handle","handle":handle},"response":null,"session":false})
+                let handle = format!("reader-{}", self.sequence);
+                self.readers.insert(handle.clone(), records.into());
+                let batch = self.batch(&handle);
+                if self.clear_after_open {
+                    self.records.clear();
+                }
+                return Ok((json!({}), serde_json::to_vec(&json!({
+                    "reader": if batch["complete"] == true { Value::Null } else { json!(handle) },
+                    "batch": batch,
+                })).unwrap()));
             }
-            "host.http.body_read" => {
-                let body = self
-                    .bodies
-                    .get_mut(params["handle"].as_str().unwrap())
-                    .unwrap();
-                return Ok(match body.pop_front() {
-                    Some(bytes) => (json!({"eof":false,"trailers":null}), bytes),
-                    None => (json!({"eof":true,"trailers":null}), vec![]),
-                });
+            "host.usage.read.next" => {
+                let batch = self.batch(params["reader"].as_str().unwrap());
+                return Ok((json!({}), serde_json::to_vec(&batch).unwrap()));
             }
-            "host.http.body_close" => {
-                self.bodies.remove(params["handle"].as_str().unwrap());
-                json!({})
+            "host.usage.read.close" => {
+                self.readers.remove(params["reader"].as_str().unwrap());
+                return Ok((json!({}), b"null".to_vec()));
             }
             _ => panic!("Unexpected host callback: {method}"),
         };
         Ok((value, vec![]))
+    }
+
+    fn batch(&mut self, handle: &str) -> Value {
+        let remaining = self.readers.get_mut(handle).unwrap();
+        let items: Vec<_> = remaining
+            .drain(..remaining.len().min(self.batch_size))
+            .collect();
+        let complete = remaining.is_empty();
+        if complete {
+            self.readers.remove(handle);
+        }
+        json!({"observation":{"generated_at_ms":1790899200000_i64,"analytics":null,"total_groups":null},"items":items,"complete":complete})
     }
 }
 
@@ -273,6 +236,7 @@ struct Harness {
     peer: JoinHandle<()>,
     runtime: Arc<Runtime>,
     next_id: u64,
+    timeout_ms: u64,
 }
 
 impl Harness {
@@ -291,7 +255,6 @@ impl Harness {
                     maximum_callbacks: 8,
                     maximum_buffered_stream_chunks: 16,
                     handshake_timeout: Duration::from_secs(2),
-                    maximum_call_timeout: Duration::from_secs(30),
                 },
             )
             .await?
@@ -330,7 +293,21 @@ impl Harness {
                     id, method, params, ..
                 } = frame.message
                 {
-                    let response = callback_store.lock().unwrap().callback(&method, &params);
+                    let params = if method.starts_with("host.usage.") {
+                        assert_eq!(params, json!({}));
+                        serde_json::from_slice(&frame.payload).unwrap()
+                    } else {
+                        assert!(frame.payload.is_empty());
+                        params
+                    };
+                    let response = {
+                        let mut store = callback_store.lock().unwrap();
+                        if method == "host.usage.read.next" && store.stall_next {
+                            store.calls.push((method, params));
+                            continue;
+                        }
+                        store.callback(&method, &params)
+                    };
                     let frame = match response {
                         Ok((result, payload)) => Frame {
                             message: Message::Result { id, result },
@@ -344,8 +321,23 @@ impl Harness {
                     {
                         break;
                     }
-                } else if tx.send(frame).is_err() {
-                    break;
+                } else {
+                    match frame.message {
+                        Message::Resume { id, epoch } => {
+                            write_frame(
+                                &mut *callback_writer.lock().await,
+                                &Frame::control(Message::Resumed { id, epoch }),
+                            )
+                            .await
+                            .unwrap();
+                        }
+                        Message::Suspend { .. } | Message::CallbackConsumed { .. } => {}
+                        _ => {
+                            if tx.send(frame).is_err() {
+                                break;
+                            }
+                        }
+                    }
                 }
             }
         });
@@ -356,6 +348,7 @@ impl Harness {
             peer,
             runtime,
             next_id: 1,
+            timeout_ms: 30_000,
         }
     }
 
@@ -382,8 +375,12 @@ impl Harness {
                     instance_id: "reports-instance".into(),
                     generation: 1,
                     incarnation: "reports-incarnation".into(),
-                    stage: Stage::Request,
-                    timeout_ms: 30_000,
+                    stage: if method == "RECONCILE" {
+                        Stage::Maintenance
+                    } else {
+                        Stage::Management
+                    },
+                    timeout_ms: self.timeout_ms,
                     resource_stream: false,
                     resource_scope_id: format!("scope-{id}"),
                     request_id: None,
@@ -465,6 +462,28 @@ fn row(id: &str) -> Value {
     json!({"id":id,"createdAt":"2026-10-01T12:00:00Z","upstreamModel":"gpt-6","requestedModel":"alias","reasoningEffort":"max","subagentKind":null,"userAgent":"codex-cli/1"})
 }
 
+fn fact(key: &str, row: &Value) -> Value {
+    let started_at = row["startedAtMs"].as_i64().unwrap_or_else(|| {
+        DateTime::parse_from_rfc3339(row["createdAt"].as_str().unwrap())
+            .unwrap()
+            .timestamp_millis()
+    });
+    json!({"kind":"record","value":{
+        "id":row["id"],
+        "data":{
+            "client_key_ref":key,"provider":null,"account_ref":null,
+            "requested_model":row["requestedModel"],"model":row["upstreamModel"],
+            "protocol":"responses","operation":"create","endpoint":"/v1/responses","client_transport":"http",
+            "service_tier":null,"started_at_ms":started_at,"completed_at_ms":null,
+            "outcome":row.get("outcome").cloned().unwrap_or(json!("succeeded")),
+            "tokens":{},"cost":{"kind":"unavailable"}
+        },
+        "user_agent":row["userAgent"],"reasoning_effort":row["reasoningEffort"],"subagent_kind":row["subagentKind"],
+        "request_kind":null,"routing_scope":null,"routing_group_refs":[],"recovered":false,
+        "request_counted":true,"usage_counted":row["usageCounted"].as_bool().unwrap_or(true)
+    }})
+}
+
 fn shared(store: MockStore) -> Arc<StdMutex<MockStore>> {
     Arc::new(StdMutex::new(store))
 }
@@ -495,7 +514,7 @@ async fn simultaneous_page_sessions_share_one_unfinished_task_and_cas_version() 
 }
 
 #[tokio::test]
-async fn all_directory_and_history_pages_use_fixed_bounds_then_publish_aggregate_only() {
+async fn ten_thousand_snapshot_facts_use_fixed_bounds_then_publish_aggregate_only() {
     let mut store = MockStore::fixture();
     store.key_page_size = 1;
     store
@@ -503,10 +522,11 @@ async fn all_directory_and_history_pages_use_fixed_bounds_then_publish_aggregate
         .push(json!({"id":"key-2","name":"Second","enabled":false}));
     store.records.insert(
         "key-1".into(),
-        (0..101)
+        (0..10_000)
             .map(|index| row(&format!("request-{index}")))
             .collect(),
     );
+    store.clear_after_open = true;
     let store = shared(store);
     let mut harness = Harness::new(store.clone()).await;
     assert_eq!(harness.submit().await["status"], 202);
@@ -514,14 +534,14 @@ async fn all_directory_and_history_pages_use_fixed_bounds_then_publish_aggregate
     let task = harness.task().await;
     assert_eq!(task["state"], "complete");
     assert_eq!(task["keys_processed"], 2);
-    assert_eq!(task["records_read"], 101);
+    assert_eq!(task["records_read"], 10_000);
     {
         let store = store.lock().unwrap();
         let report = store
             .value("reports", task["report_id"].as_str().unwrap())
             .unwrap();
         assert_eq!(report["keys"].as_array().unwrap().len(), 1);
-        assert_eq!(report["keys"][0]["groups"][0]["requests"], 101);
+        assert_eq!(report["keys"][0]["groups"][0]["requests"], 10_000);
         assert!(report["keys"][0]["groups"][0].get("id").is_none());
         assert_eq!(
             store
@@ -535,10 +555,12 @@ async fn all_directory_and_history_pages_use_fixed_bounds_then_publish_aggregate
             store
                 .calls
                 .iter()
-                .filter(|(method, _)| method == "host.http.dispatch")
+                .filter(|(method, _)| method == "host.usage.read.next")
                 .count(),
-            103
+            9
         );
+        assert!(store.readers.is_empty());
+        assert!(store.records.is_empty());
         let puts = store
             .calls
             .iter()
@@ -603,14 +625,16 @@ async fn renamed_keys_and_reused_names_keep_their_ids_and_unavailable_keys_are_s
 }
 
 #[tokio::test]
-async fn detail_disappearing_after_listing_fails_without_publishing_partial_counts() {
+async fn invalid_fact_closes_snapshot_and_never_publishes_partial_counts() {
     let mut store = MockStore::fixture();
+    store.batch_size = 1;
+    let mut invalid = row("request-2");
+    invalid["startedAtMs"] = json!(i64::MAX);
     store
         .records
         .get_mut("key-1")
         .unwrap()
-        .push(row("request-2"));
-    store.missing_detail = Some("request-2".into());
+        .extend([invalid, row("request-3")]);
     let store = shared(store);
     let mut harness = Harness::new(store.clone()).await;
     harness.submit().await;
@@ -619,15 +643,109 @@ async fn detail_disappearing_after_listing_fails_without_publishing_partial_coun
     assert_eq!(task["state"], "failed");
     assert_eq!(task["records_read"], 1);
     assert!(task["report_id"].is_null());
-    assert!(harness.runtime.state.lock().await.scan.is_none());
+    {
+        let store = store.lock().unwrap();
+        assert!(store.readers.is_empty());
+        assert!(
+            store
+                .calls
+                .iter()
+                .any(|(method, _)| method == "host.usage.read.close")
+        );
+        assert!(
+            !store
+                .values
+                .keys()
+                .any(|(namespace, _)| namespace == "reports")
+        );
+    }
+    harness.shutdown().await;
+}
+
+#[tokio::test]
+async fn stalled_snapshot_closes_before_the_parent_deadline_and_saves_failure() {
+    let mut store = MockStore::fixture();
+    store.batch_size = 1;
+    store.stall_next = true;
+    store
+        .records
+        .get_mut("key-1")
+        .unwrap()
+        .push(row("request-2"));
+    let store = shared(store);
+    let mut harness = Harness::new(store.clone()).await;
+    harness.submit().await;
+    // Leave 100 ms for reading, followed by the production five-second save reserve.
+    harness.timeout_ms = 5100;
+    harness.reconcile().await;
+    let task = harness.task().await;
+    assert_eq!(task["state"], "failed");
+    assert_eq!(task["records_read"], 1);
     assert!(
-        !store
-            .lock()
+        task["error"]
+            .as_str()
             .unwrap()
-            .values
-            .keys()
-            .any(|(namespace, _)| namespace == "reports")
+            .contains("processing budget")
     );
+    assert!(task["report_id"].is_null());
+    harness.reconcile().await;
+    {
+        let store = store.lock().unwrap();
+        assert!(store.readers.is_empty());
+        assert_eq!(
+            store
+                .calls
+                .iter()
+                .filter(|(method, _)| method == "host.usage.read.next")
+                .count(),
+            1
+        );
+        assert!(
+            store
+                .calls
+                .iter()
+                .any(|(method, _)| method == "host.usage.read.close")
+        );
+        assert!(store.value("control", "index").is_none());
+    }
+    harness.shutdown().await;
+}
+
+#[tokio::test]
+async fn host_usage_eligibility_is_applied_before_report_exclusions() {
+    let mut store = MockStore::fixture();
+    let rows = store.records.get_mut("key-1").unwrap();
+    for (id, outcome, counted, user_agent) in [
+        ("warmup", "succeeded", false, "prompt-excluded"),
+        ("recovered", "succeeded", false, "codex-cli"),
+        ("failed", "failed", false, "codex-cli"),
+        ("cancelled", "cancelled", false, "codex-cli"),
+        ("incomplete", "incomplete", false, "codex-cli"),
+        ("running", "running", false, "codex-cli"),
+        ("excluded", "succeeded", true, "prompt-excluded"),
+    ] {
+        let mut record = row(id);
+        record["outcome"] = json!(outcome);
+        record["usageCounted"] = json!(counted);
+        record["userAgent"] = json!(user_agent);
+        rows.push(record);
+    }
+    let store = shared(store);
+    let mut harness = Harness::new(store.clone()).await;
+    harness.submit().await;
+    harness.reconcile().await;
+    let task = harness.task().await;
+    assert_eq!(task["state"], "complete");
+    assert_eq!(task["records_read"], 8);
+    {
+        let store = store.lock().unwrap();
+        let report = store
+            .value("reports", task["report_id"].as_str().unwrap())
+            .unwrap();
+        assert_eq!(report["keys"][0]["groups"][0]["requests"], 1);
+        assert_eq!(report["removed"]["user_agent"], 1);
+        assert_eq!(report["removed"]["model"], 0);
+    }
     harness.shutdown().await;
 }
 
@@ -636,16 +754,15 @@ async fn read_failure_discards_partial_aggregates_and_never_retries_itself() {
     let mut store = MockStore::fixture();
     store.records.insert(
         "key-1".into(),
-        (0..101)
+        (0..1025)
             .map(|index| row(&format!("request-{index}")))
             .collect(),
     );
     store.failures.push(Failure {
-        method: "host.http.dispatch",
+        method: "host.usage.read.next",
         namespace: None,
         key: None,
         state: None,
-        page: Some(2),
         after_commit: false,
     });
     let store = shared(store);
@@ -654,7 +771,7 @@ async fn read_failure_discards_partial_aggregates_and_never_retries_itself() {
     harness.reconcile().await;
     let task = harness.task().await;
     assert_eq!(task["state"], "failed");
-    assert_eq!(task["records_read"], 100);
+    assert_eq!(task["records_read"], 1024);
     assert!(task["report_id"].is_null());
     assert!(harness.runtime.state.lock().await.scan.is_none());
     harness.reconcile().await;
@@ -671,9 +788,9 @@ async fn read_failure_discards_partial_aggregates_and_never_retries_itself() {
             store
                 .calls
                 .iter()
-                .filter(|(method, _)| method == "host.http.dispatch")
+                .filter(|(method, _)| method == "host.usage.read.next")
                 .count(),
-            102
+            1
         );
     }
     harness.shutdown().await;
@@ -899,7 +1016,6 @@ async fn uncertain_index_write_is_resolved_before_replacing_previous_task() {
                 namespace: Some("control"),
                 key: Some("index"),
                 state: None,
-                page: None,
                 after_commit: false,
             });
             store.failures.push(Failure {
@@ -907,7 +1023,6 @@ async fn uncertain_index_write_is_resolved_before_replacing_previous_task() {
                 namespace: Some("control"),
                 key: Some("index"),
                 state: None,
-                page: None,
                 after_commit: false,
             });
         }
@@ -1005,7 +1120,6 @@ async fn uncertain_submission_is_recovered_by_a_later_callback_without_duplicate
             namespace: Some("control"),
             key: Some("task"),
             state: None,
-            page: None,
             after_commit: false,
         });
     }
@@ -1019,7 +1133,6 @@ async fn uncertain_submission_is_recovered_by_a_later_callback_without_duplicate
         namespace: Some("control"),
         key: Some("task"),
         state: None,
-        page: None,
         after_commit: false,
     });
     assert_eq!(
@@ -1040,9 +1153,9 @@ async fn uncertain_submission_is_recovered_by_a_later_callback_without_duplicate
             store
                 .calls
                 .iter()
-                .filter(|(method, _)| method == "host.http.dispatch")
+                .filter(|(method, _)| method == "host.usage.records.scan")
                 .count(),
-            2
+            1
         );
         assert_eq!(
             store.value("control", "index").unwrap()["reports"]
@@ -1070,7 +1183,6 @@ async fn uncommitted_uncertain_submission_does_not_block_a_fresh_submission() {
             namespace: Some("control"),
             key: Some("task"),
             state: None,
-            page: None,
             after_commit: false,
         });
     }
@@ -1099,9 +1211,9 @@ async fn uncommitted_uncertain_submission_does_not_block_a_fresh_submission() {
             store
                 .calls
                 .iter()
-                .filter(|(method, _)| method == "host.http.dispatch")
+                .filter(|(method, _)| method == "host.usage.records.scan")
                 .count(),
-            2
+            1
         );
         let submissions: Vec<_> = store
             .calls
@@ -1143,7 +1255,6 @@ async fn running_save_recovers_after_both_ack_and_immediate_read_are_unavailable
             namespace: Some("control"),
             key: Some("task"),
             state: None,
-            page: None,
             after_commit: false,
         });
     }
@@ -1165,9 +1276,9 @@ async fn running_save_recovers_after_both_ack_and_immediate_read_are_unavailable
             .unwrap()
             .calls
             .iter()
-            .filter(|(method, _)| method == "host.http.dispatch")
+            .filter(|(method, _)| method == "host.usage.records.scan")
             .count(),
-        2
+        1
     );
     harness.shutdown().await;
 }

@@ -113,7 +113,7 @@ async function showDialog(dialog) {
     observer.observe(document.body);
   });
   if (dialog.open) return;
-  const hostHeight = Number.parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--cp-plugin-viewport-height'));
+  const hostHeight = Number.parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--plugin-viewport-height'));
   const available = Math.min(visible.height, hostHeight > 0 ? hostHeight : visible.height);
   dialog.style.maxHeight = Math.max(0, available - 32) + 'px';
   dialog.style.top = visible.top + 16 + 'px';

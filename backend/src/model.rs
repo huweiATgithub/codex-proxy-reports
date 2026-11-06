@@ -61,6 +61,9 @@ pub struct ResolvedConfiguration {
 
 impl Configuration {
     pub fn resolve(self, now: DateTime<Utc>) -> Result<ResolvedConfiguration> {
+        // 宿主快照以毫秒定义半开区间，聚合与持久化边界使用同一精度。
+        let now = DateTime::from_timestamp_millis(now.timestamp_millis())
+            .context("Report time is out of range")?;
         let timezone: Tz = self
             .timezone
             .parse()
@@ -146,12 +149,9 @@ impl ResolvedConfiguration {
     }
 }
 
-/// 宿主 usage 列表用 createdAt 表示逻辑请求的开始时间；不是重试尝试的 startedAt。
-#[derive(Clone, Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
+/// 宿主逻辑请求事实的聚合输入；不包含重试尝试或原始请求内容。
+#[derive(Clone, Debug)]
 pub struct UsageRecord {
-    pub id: String,
-    #[serde(rename = "createdAt")]
     pub started_at: DateTime<Utc>,
     pub upstream_model: Option<String>,
     pub requested_model: Option<String>,
@@ -310,21 +310,17 @@ mod tests {
     }
 
     #[test]
-    fn usage_record_reads_actual_host_list_fields_and_ignores_other_metadata() {
-        let record: UsageRecord = serde_json::from_value(serde_json::json!({
-            "id": "request-1",
-            "createdAt": "2026-10-17T12:34:56Z",
-            "upstreamModel": "gpt-6",
-            "requestedModel": "alias",
-            "reasoningEffort": "max",
-            "subagentKind": "worker",
-            "userAgent": null,
-            "logicalOutcome": "success",
-            "tokenDetails": { "inputTokens": 123 }
-        }))
-        .unwrap();
-        assert_eq!(record.started_at, now());
-        assert_eq!(record.upstream_model.as_deref(), Some("gpt-6"));
-        assert_eq!(record.user_agent, None);
+    fn relative_window_and_saved_bounds_use_the_host_millisecond_precision() {
+        let submitted = now() + Duration::nanoseconds(123_456_789);
+        let resolved = Configuration::default().resolve(submitted).unwrap();
+        assert_eq!(
+            resolved.bounds.end.to_rfc3339(),
+            "2026-10-17T12:34:56.123+00:00"
+        );
+        assert_eq!(
+            resolved.bounds.end - resolved.bounds.start,
+            Duration::hours(168)
+        );
+        assert_eq!(resolved.bounds.start.timestamp_subsec_nanos(), 123_000_000);
     }
 }

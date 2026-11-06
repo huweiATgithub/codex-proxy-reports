@@ -13,10 +13,10 @@ function installBridge(initial) {
     theme = value.name;
     document.documentElement.dataset.theme = theme;
     document.documentElement.style.colorScheme = theme;
-    for (const [key, token] of Object.entries(value.tokens)) document.documentElement.style.setProperty(key, token);
+    for (const [key, token] of Object.entries(value.tokens)) document.documentElement.style.setProperty(`--z-${key}`, token);
     window.dispatchEvent(new CustomEvent('codex-proxy-themechange', { detail: { theme } }));
   }
-  function layout(height) { document.documentElement.style.setProperty('--cp-plugin-viewport-height', `${height}px`); }
+  function layout(height) { document.documentElement.style.setProperty('--plugin-viewport-height', `${height}px`); }
   window.addEventListener('message', event => {
     if (event.source !== parent || event.origin !== initial.parentOrigin || !matches(event.data)) return;
     const message = event.data;
@@ -122,7 +122,7 @@ async function start() {
   });
   const initial = { ...envelope, parentOrigin: location.origin, plugin: { name: 'huwei.usage-reports' }, page: { id: page.id, title: page.title }, theme: { name: theme, tokens: {} }, viewportHeight: viewportHeight(), resourceUrls };
   const csp = "default-src 'none'; script-src 'unsafe-inline' data:; style-src 'unsafe-inline' data:; img-src data:; font-src data:; connect-src 'none'; worker-src 'none'; child-src 'none'; frame-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'";
-  html = html.replace('<head>', `<head><meta http-equiv="Content-Security-Policy" content="${csp}"><style>html{overflow:hidden}body{min-height:var(--cp-plugin-viewport-height,0px)}</style><script>(${installBridge.toString()})(${JSON.stringify(initial).replace(/</g, '\\u003c')})</script>`);
+  html = html.replace('<head>', `<head><meta http-equiv="Content-Security-Policy" content="${csp}"><style>html{overflow:hidden}body{min-height:var(--plugin-viewport-height,0px)}</style><script>(${installBridge.toString()})(${JSON.stringify(initial).replace(/</g, '\\u003c')})</script>`);
   frame.srcdoc = html;
   window.addEventListener('resize', () => { resizeFrame(); send('layout', { viewportHeight: viewportHeight() }); });
 }

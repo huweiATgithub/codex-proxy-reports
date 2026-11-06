@@ -1,9 +1,5 @@
-//! 在宿主维护回调内分页扫描历史，保存任务与不可变报表
-use std::{
-    collections::{HashMap, VecDeque},
-    sync::Arc,
-    time::{Duration, Instant},
-};
+//! 在单次宿主维护回调内扫描历史快照，保存任务与不可变报表
+use std::{collections::HashMap, sync::Arc, time::Duration};
 
 use anyhow::{Context, Result, bail};
 use chrono::{DateTime, Utc};
@@ -12,12 +8,9 @@ use gateway_plugin_sdk::{
     call::{
         host::{KeyListRequest, StateGetResult, StatePutResult},
         management::{ManagementRegistration, ManagementRequest, ManagementResponse},
-        middleware::http::Version,
+        services::usage::{ScanUsageRecords, UsageReadFilter, UsageReadItem, UsageRecordFilter},
     },
-    client::{
-        ComposedPlugin, Empty, HostClient, HttpBody, HttpFrame, HttpRequest, PluginBuilder,
-        TypedReply, methods,
-    },
+    client::{ComposedPlugin, Empty, HostClient, PluginBuilder, TypedReply, UsageReader, methods},
 };
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json::{Value, json};
@@ -29,8 +22,7 @@ use crate::{
     model::{Bounds, Configuration, Report, UsageRecord},
 };
 
-const CHUNK_TIME: Duration = Duration::from_secs(18);
-const READ_TIMEOUT: Duration = Duration::from_secs(8);
+const SAVE_RESERVE: Duration = Duration::from_secs(5);
 const HISTORY_LIMIT: usize = 20;
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -77,25 +69,9 @@ struct Index {
     garbage: Vec<String>,
 }
 
-enum Position {
-    Directory {
-        cursor: Option<String>,
-    },
-    History {
-        page: u32,
-        total: Option<u64>,
-    },
-    Records {
-        ids: VecDeque<String>,
-        next_page: Option<u32>,
-        total: u64,
-    },
-}
-
 struct Scan {
     aggregate: Accumulator,
     keys: HashMap<String, usize>,
-    position: Position,
 }
 
 struct PendingSubmission {
@@ -156,6 +132,10 @@ pub fn plugin() -> Result<ComposedPlugin> {
             })?
             .build()?,
     )
+}
+
+fn host_error(error: PluginFault) -> anyhow::Error {
+    anyhow::anyhow!("{:?}: {}", error.code, error.message)
 }
 
 fn fault(error: anyhow::Error) -> PluginFault {
@@ -405,7 +385,6 @@ impl Runtime {
                 scan: Scan {
                     aggregate: Accumulator::new(resolved),
                     keys: HashMap::new(),
-                    position: Position::Directory { cursor: None },
                 },
             });
             let mut version = state.task_version;
@@ -425,7 +404,6 @@ impl Runtime {
     }
 
     async fn reconcile(&self, host: &HostClient) -> Result<()> {
-        let start = Instant::now();
         let mut scan = {
             let mut state = self.state.lock().await;
             state.initialize(host).await?;
@@ -450,24 +428,56 @@ impl Runtime {
             }
             scan
         };
-        let result = async {
-            while start.elapsed() < CHUNK_TIME {
-                let done = tokio::time::timeout(READ_TIMEOUT, self.step(host, &mut scan))
-                    .await
-                    .context("Host history read timed out")??;
-                if done {
-                    return Ok(true);
-                }
-            }
-            Ok::<_, anyhow::Error>(false)
-        }
-        .await;
+        // Reader 绑定本次维护调用；不把活跃句柄保存在跨调用的 State 中。
+        let mut reader = None;
+        let budget = host
+            .remaining_budget()
+            .unwrap_or_default()
+            .saturating_sub(SAVE_RESERVE);
+        let result = tokio::time::timeout(budget, async {
+            self.read_keys(host, &mut scan).await?;
+            let bounds = &scan.aggregate.resolved.bounds;
+            reader = Some(
+                host.scan_usage_records(ScanUsageRecords {
+                    filter: UsageReadFilter {
+                        records: UsageRecordFilter {
+                            start_ms: bounds.start.timestamp_millis(),
+                            end_ms: bounds.end.timestamp_millis(),
+                            provider: None,
+                            model: None,
+                            account_ref: None,
+                            client_key_ref: None,
+                        },
+                        routing_group_ref: None,
+                    },
+                    batch_size: None,
+                })
+                .await
+                .map_err(host_error)
+                .context("Could not open host usage snapshot")?,
+            );
+            self.read_records(reader.as_mut().expect("opened reader"), &mut scan)
+                .await
+        })
+        .await
+        .context("Host usage snapshot exceeded the report processing budget")
+        .and_then(|result| result);
+        // 完整读取后 close 是空操作；提前退出时尽快释放快照和数据库连接。
+        let closed = if let Some(reader) = &mut reader {
+            tokio::time::timeout(Duration::from_secs(2), reader.close())
+                .await
+                .context("Closing host usage snapshot timed out")
+                .and_then(|result| {
+                    result
+                        .map_err(host_error)
+                        .context("Could not close host usage snapshot")
+                })
+        } else {
+            Ok(())
+        };
         let mut state = self.state.lock().await;
-        match result {
-            Ok(false) => {
-                state.scan = Some(scan);
-            }
-            Ok(true) => {
+        match result.and(closed) {
+            Ok(()) => {
                 let id = state
                     .task
                     .as_ref()
@@ -552,203 +562,83 @@ impl Runtime {
         Ok(())
     }
 
-    async fn step(&self, host: &HostClient, scan: &mut Scan) -> Result<bool> {
-        match &mut scan.position {
-            Position::Directory { cursor } => {
-                let page = host
-                    .list_keys(KeyListRequest {
-                        cursor: cursor.clone(),
-                        limit: 100,
-                    })
-                    .await
-                    .map_err(|_| anyhow::anyhow!("Could not read Client Keys"))?;
-                if page.next_cursor.is_some()
-                    && (page.keys.is_empty() || page.next_cursor == *cursor)
-                {
-                    bail!("Host Key directory did not advance");
-                }
-                for key in page.keys {
-                    if key.id.is_empty() || scan.keys.contains_key(&key.id) {
-                        bail!("Host Key directory returned an invalid or repeated ID");
-                    }
-                    if key.name.trim().is_empty() {
-                        continue;
-                    }
-                    let index = scan.aggregate.add_key(key.id.clone(), key.name);
-                    scan.keys.insert(key.id, index);
-                }
-                let mut state = self.state.lock().await;
-                if let Some(task) = &mut state.task {
-                    task.keys_total = scan.keys.len();
-                }
-                if let Some(cursor) = page.next_cursor {
-                    scan.position = Position::Directory {
-                        cursor: Some(cursor),
-                    };
-                } else {
-                    scan.position = Position::History {
-                        page: 1,
-                        total: None,
-                    };
-                }
+    async fn read_keys(&self, host: &HostClient, scan: &mut Scan) -> Result<()> {
+        let mut cursor = None;
+        loop {
+            let page = host
+                .list_keys(KeyListRequest {
+                    cursor: cursor.clone(),
+                    limit: 100,
+                })
+                .await
+                .map_err(host_error)
+                .context("Could not read Client Keys")?;
+            if page.next_cursor.is_some() && (page.keys.is_empty() || page.next_cursor == cursor) {
+                bail!("Host Key directory did not advance");
             }
-            Position::History { page, total } => {
-                let response = read_page(host, *page, &scan.aggregate.resolved.bounds).await?;
-                if response.current_page != *page
-                    || response.page_size != 100
-                    || response.items.len() > 100
-                {
-                    bail!("Invalid host history page");
+            for key in page.keys {
+                if key.id.is_empty() || scan.keys.contains_key(&key.id) {
+                    bail!("Host Key directory returned an invalid or repeated ID");
                 }
-                if total.is_some_and(|expected| expected != response.total) {
-                    bail!("Host history changed during report generation");
+                if key.name.trim().is_empty() {
+                    continue;
                 }
-                let offset = u64::from(*page - 1) * 100;
-                let expected = response.total.saturating_sub(offset).min(100) as usize;
-                if response.items.len() != expected || offset > response.total {
-                    bail!("Incomplete host history page");
-                }
-                let mut ids = std::collections::HashSet::new();
-                for record in &response.items {
-                    if record.id.is_empty() || !ids.insert(&record.id) {
-                        bail!("Invalid or repeated request in host history page");
-                    }
-                }
-                let done = offset + response.items.len() as u64 >= response.total;
-                scan.position = Position::Records {
-                    ids: response.items.into_iter().map(|record| record.id).collect(),
-                    next_page: if done {
-                        None
-                    } else {
-                        Some(page.checked_add(1).context("History page overflow")?)
-                    },
-                    total: response.total,
+                let index = scan.aggregate.add_key(key.id.clone(), key.name);
+                scan.keys.insert(key.id, index);
+            }
+            if let Some(task) = &mut self.state.lock().await.task {
+                task.keys_total = scan.keys.len();
+            }
+            cursor = page.next_cursor;
+            if cursor.is_none() {
+                return Ok(());
+            }
+        }
+    }
+
+    async fn read_records(&self, reader: &mut UsageReader, scan: &mut Scan) -> Result<()> {
+        while let Some(batch) = reader
+            .next_batch()
+            .await
+            .map_err(host_error)
+            .context("Could not read host usage snapshot")?
+        {
+            let count = batch.items.len() as u64;
+            for item in batch.items {
+                let UsageReadItem::Record(fact) = item else {
+                    bail!("Host usage scan returned statistics instead of request facts");
                 };
+                // 使用宿主的完整交付、预热排除和恢复关联口径。
+                if !fact.usage_counted {
+                    continue;
+                }
+                if let Some(key) = scan.keys.get(&fact.data.client_key_ref) {
+                    scan.aggregate.add_record(
+                        *key,
+                        &UsageRecord {
+                            started_at: DateTime::from_timestamp_millis(fact.data.started_at_ms)
+                                .context("Host usage fact has an invalid start time")?,
+                            upstream_model: fact.data.model,
+                            requested_model: fact.data.requested_model,
+                            reasoning_effort: fact.reasoning_effort,
+                            subagent_kind: fact.subagent_kind,
+                            user_agent: fact.user_agent,
+                        },
+                    )?;
+                }
             }
-            Position::Records {
-                ids,
-                next_page,
-                total,
-            } => {
-                if let Some(id) = ids.front() {
-                    let detail = read_record(host, id).await?;
-                    if let Some(key) = scan.keys.get(&detail.client_api_key_id) {
-                        scan.aggregate.add_record(*key, &detail.record)?;
-                    }
-                    ids.pop_front();
-                    let mut state = self.state.lock().await;
-                    if let Some(task) = &mut state.task {
-                        task.records_read += 1;
-                    }
-                    return Ok(false);
-                }
-                if let Some(page) = next_page {
-                    scan.position = Position::History {
-                        page: *page,
-                        total: Some(*total),
-                    };
-                    return Ok(false);
-                }
-                let mut state = self.state.lock().await;
-                if let Some(task) = &mut state.task {
-                    task.keys_processed = scan.keys.len();
-                }
-                return Ok(true);
+            if let Some(task) = &mut self.state.lock().await.task {
+                task.records_read = task
+                    .records_read
+                    .checked_add(count)
+                    .context("Read count overflow")?;
             }
         }
-        Ok(false)
-    }
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct Page {
-    items: Vec<RecordId>,
-    current_page: u32,
-    page_size: u16,
-    total: u64,
-}
-
-#[derive(Deserialize)]
-struct RecordId {
-    id: String,
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct RecordDetail {
-    client_api_key_id: String,
-    #[serde(flatten)]
-    record: UsageRecord,
-}
-
-#[derive(Deserialize)]
-struct Envelope<T> {
-    code: i32,
-    data: T,
-}
-
-async fn read_page(host: &HostClient, page: u32, bounds: &Bounds) -> Result<Page> {
-    let query = url::form_urlencoded::Serializer::new(String::new())
-        .append_pair("status", "success")
-        .append_pair("currentPage", &page.to_string())
-        .append_pair("pageSize", "100")
-        .append_pair("startTime", &bounds.start.to_rfc3339())
-        .append_pair("endTime", &bounds.end.to_rfc3339())
-        .finish();
-    read_history(host, format!("/api/admin/usage/records?{query}")).await
-}
-
-async fn read_record(host: &HostClient, id: &str) -> Result<RecordDetail> {
-    let query = url::form_urlencoded::Serializer::new(String::new())
-        .append_pair("id", id)
-        .finish();
-    let detail: RecordDetail =
-        read_history(host, format!("/api/admin/usage/records/detail?{query}")).await?;
-    if detail.record.id != id || detail.client_api_key_id.is_empty() {
-        bail!("Host history detail returned an invalid request or Key ID");
-    }
-    Ok(detail)
-}
-
-async fn read_history<T: DeserializeOwned>(host: &HostClient, uri: String) -> Result<T> {
-    let mut response = host
-        .dispatch_http(HttpRequest {
-            settings: Value::Null,
-            method: "GET".into(),
-            uri,
-            version: Version::Http11,
-            headers: vec![],
-            timeout_ms: Some(8000),
-            body: HttpBody::empty(),
-        })
-        .await
-        .map_err(|_| anyhow::anyhow!("Could not dispatch host history query"))?;
-    if response.status != 200 {
-        let _ = response.body.close().await;
-        bail!("Host history query returned HTTP {}", response.status);
-    }
-    let mut bytes = Vec::new();
-    while let Some(frame) = response
-        .body
-        .read()
-        .await
-        .map_err(|_| anyhow::anyhow!("Could not read host history response"))?
-    {
-        if let HttpFrame::Data(data) = frame {
-            if bytes.len() + data.len() > 16 * 1024 * 1024 {
-                let _ = response.body.close().await;
-                bail!("Host history response exceeds 16 MiB");
-            }
-            bytes.extend(data);
+        if let Some(task) = &mut self.state.lock().await.task {
+            task.keys_processed = scan.keys.len();
         }
+        Ok(())
     }
-    let envelope: Envelope<T> =
-        serde_json::from_slice(&bytes).context("Invalid host history response")?;
-    if envelope.code != 200 {
-        bail!("Host history query failed");
-    }
-    Ok(envelope.data)
 }
 
 #[cfg(test)]

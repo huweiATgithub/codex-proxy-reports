@@ -163,7 +163,6 @@ mod tests {
 
     fn record() -> UsageRecord {
         UsageRecord {
-            id: "request-1".into(),
             started_at: now() - chrono::Duration::hours(1),
             upstream_model: Some("gpt-6".into()),
             requested_model: Some("alias".into()),

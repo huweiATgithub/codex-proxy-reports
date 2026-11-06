@@ -150,9 +150,18 @@ async function browserSmoke(saved) {
   assert.equal(await ui.locator('#home-view').isVisible(), false);
   assert.equal(await ui.locator('#charts .chart-card').count(), 2);
   assert.equal(await ui.locator('#charts .usage-chart').count(), 2);
-  assert.equal(await ui.locator('#report-total').textContent(), '109 retained requests');
+  assert.equal(await ui.locator('#report-total').textContent(), '10,109 retained requests');
   assert.ok((await ui.locator('#report-window').textContent()).includes('UTC'));
   assert.equal(await page.locator('iframe').getAttribute('sandbox'), 'allow-scripts');
+  const hostInk = await page.locator('html').evaluate(element => getComputedStyle(element).getPropertyValue('--z-color-text').trim());
+  const frameTheme = await ui.locator('html').evaluate(element => {
+    const style = getComputedStyle(element);
+    return { token: style.getPropertyValue('--z-color-text').trim(), ink: style.getPropertyValue('--ink').trim(), viewport: parseFloat(style.getPropertyValue('--plugin-viewport-height')) };
+  });
+  assert.ok(hostInk, 'official host exposes theme tokens');
+  assert.equal(frameTheme.token, hostInk);
+  assert.equal(frameTheme.ink, hostInk, 'report styles use the host theme');
+  assert.ok(frameTheme.viewport > 0, 'host publishes the plugin viewport height');
   await ui.locator('#reuse').click();
   await ui.locator('#configure-step').waitFor();
   assert.equal(await ui.locator('#wizard-view').isVisible(), true);
@@ -220,7 +229,7 @@ async function run() {
   await startHost();
   pass('official host bootstrap, fresh PostgreSQL database and administrator authentication');
   const hostVersion = command(resolve(options['host-binary']), ['--version']);
-  assert.equal(hostVersion, '3.31.3');
+  assert.equal(hostVersion, '3.41.2');
   if (options['plugin-cli']) command(resolve(options['plugin-cli']), ['--version']);
   const archive = readFileSync(resolve(options.package));
   const packageSha256 = createHash('sha256').update(archive).digest('hex');
@@ -282,11 +291,20 @@ UPDATE model_requests SET started_at = ${literal(dayStart.toISOString())} WHERE 
 UPDATE model_requests SET started_at = ${literal(dayEnd.toISOString())} WHERE request_observation_json #>> '{request,userAgent}' = 'reports-integration/INTEGRATION-at-end';
 UPDATE model_requests SET started_at = ${literal(new Date(dayStart.getTime() - 1).toISOString())} WHERE request_observation_json #>> '{request,userAgent}' = 'reports-integration/INTEGRATION-before-start';
 UPDATE model_requests SET attempt_count = 3 WHERE request_observation_json #>> '{request,userAgent}' = 'reports-integration/INTEGRATION-bulk-0';`);
+  // Expand a real delivered request into 10,000 native history fixtures in this
+  // disposable database. This exercises host snapshot batching without 10,000
+  // provider calls; IDs are unique and all other usage facts retain the source.
+  sql(`INSERT INTO model_requests SELECT copy.*
+FROM model_requests source CROSS JOIN generate_series(1, 10000) n
+CROSS JOIN LATERAL jsonb_populate_record(NULL::model_requests,
+  to_jsonb(source) || jsonb_build_object('id', 'integration-scan-' || n, 'attempt_count', 1)) copy
+WHERE source.request_observation_json #>> '{request,userAgent}' = 'reports-integration/INTEGRATION-bulk-0'`);
+  assert.equal(Number(sql('SELECT count(*) FROM model_requests')), 10117);
   const emptyKeys = [];
   for (let offset = 0; offset < 103; offset += 10) emptyKeys.push(...await Promise.all(Array.from({ length: Math.min(10, 103 - offset) }, (_, index) => makeKey(`Reports empty ${offset + index}`))));
   await json('/api/admin/client-keys/update', { id: primary.id, name: 'Reports renamed', groupIds: [], maxConcurrency: 0, requestsPerMinute: 0 });
   await json('/api/admin/client-keys/update', { id: secondary.id, name: 'Reports primary', groupIds: [], maxConcurrency: 0, requestsPerMinute: 0 });
-  pass('real upstream writes paginated success/failure history and a cancelled transport-incomplete stream, with native prewarm and timestamp fixtures');
+  pass('117 controlled upstream requests plus 10,000 native history fixtures, including prewarm and timestamp boundaries');
   const configuration = { window: { kind: 'custom', start_date: day, end_date: day }, timezone: 'UTC', exclusions: { user_agent_patterns: ['^prompt'], models: ['codex-auto-review', 'gpt-5.6-luna'] } };
   await management('api/tasks', { ...configuration, exclusions: { user_agent_patterns: ['('], models: [] } }, 400);
   await management('api/tasks', { ...configuration, timezone: 'Invalid/Zone' }, 400);
@@ -297,11 +315,11 @@ UPDATE model_requests SET attempt_count = 3 WHERE request_observation_json #>> '
   assert.ok(['queued', 'running'].includes(submitted.task.state));
   await management('api/tasks', configuration, 409);
   pass('shared unfinished task rejects concurrent submission with HTTP 409');
-  const task = await until(async () => { const { task } = await management('api/task'); if (['failed', 'interrupted'].includes(task.state)) throw Object.assign(new Error(JSON.stringify(task)), { fatal: true }); assert.equal(task.state, 'complete', JSON.stringify(task)); return task; }, 'paginated report completes', Number(options['task-timeout-ms'] || 600000), 1000);
+  const task = await until(async () => { const { task } = await management('api/task'); if (['failed', 'interrupted'].includes(task.state)) throw Object.assign(new Error(JSON.stringify(task)), { fatal: true }); assert.equal(task.state, 'complete', JSON.stringify(task)); return task; }, 'snapshot report completes', Number(options['task-timeout-ms'] || 600000), 1000);
   const completionMs = Date.now() - startedAt;
   assert.equal(task.keys_total, 105);
   assert.equal(task.keys_processed, 105);
-  assert.equal(task.records_read, 112);
+  assert.equal(task.records_read, 10115);
   assert.ok(task.report_id);
   const { report: saved } = await management(`api/reports/detail?id=${encodeURIComponent(task.report_id)}`);
   assert.equal(Date.parse(saved.bounds.start), dayStart.getTime());
@@ -314,7 +332,7 @@ UPDATE model_requests SET attempt_count = 3 WHERE request_observation_json #>> '
   assert.equal(second.name, 'Reports primary');
   const groups = (key) => [...key.groups].sort((left, right) => left.model.localeCompare(right.model) || left.reasoning_effort.localeCompare(right.reasoning_effort) || Number(left.is_subagent) - Number(right.is_subagent));
   assert.deepEqual(groups(first), groups({ groups: [
-    { model: 'gpt-5.4', reasoning_effort: 'low', is_subagent: false, requests: 102 },
+    { model: 'gpt-5.4', reasoning_effort: 'low', is_subagent: false, requests: 10102 },
     { model: 'gpt-5.4', reasoning_effort: 'high', is_subagent: true, requests: 2 },
     { model: 'gpt-5.4', reasoning_effort: 'unspecified', is_subagent: false, requests: 1 },
   ] }));
@@ -326,7 +344,7 @@ UPDATE model_requests SET attempt_count = 3 WHERE request_observation_json #>> '
   ] }));
   assert.ok(Buffer.byteLength(JSON.stringify(saved)) <= 48 * 1024);
   assert.equal((await management('api/reports')).reports.length, 1);
-  pass(`105-key directory and >100-record paging, Key renames and name reuse, host success classification, half-open UTC bounds, exact exclusions and groups (${completionMs} ms)`);
+  pass(`105-key directory and 10,115-fact snapshot batching, Key renames and name reuse, host success classification, half-open UTC bounds, exact exclusions and groups (${completionMs} ms)`);
   for (let offset = 0; offset < emptyKeys.length; offset += 10) await Promise.all(emptyKeys.slice(offset, offset + 10).map((key) => json('/api/admin/client-keys/delete', { id: key.id })));
   const empty = await completeTask({ ...configuration, exclusions: { user_agent_patterns: ['.*'], models: [] } });
   assert.equal(empty.task.report_id, null);
@@ -361,7 +379,7 @@ UPDATE model_requests SET attempt_count = 3 WHERE request_observation_json #>> '
   assert.equal((await management('api/reports')).reports.length, 1);
   pass('restart marks unfinished task interrupted without publishing partial data');
   if (options.browser) await browserSmoke(saved);
-  const evidence = { hostVersion, hostCommit: options['host-commit'] || 'e7e5b659cd4a8c8a7be2028ed52f27cbf7a526a9', hostBinarySha256: createHash('sha256').update(readFileSync(resolve(options['host-binary']))).digest('hex'), packageSha256, completionMs, checks, report: saved, fixture: { requests: 117, directoryKeys: 105, successfulRecordsRead: 112, retainedRequests: 109, nativeDatabaseOverrides: ['prewarm request kind', 'boundary start timestamps', 'one logical request with three attempts'] }, screenshot: options.browser ? join(temporary, 'real-host-report.png') : null, hostUrl: base, pageUrl: `${base}/plugins/${instanceId}/${view.pages[0].id}` };
+  const evidence = { hostVersion, hostCommit: options['host-commit'] || 'ba3baddbda7293d1d76ea066dd5e42298618c15a', hostBinarySha256: createHash('sha256').update(readFileSync(resolve(options['host-binary']))).digest('hex'), packageSha256, completionMs, checks, report: saved, fixture: { upstreamRequests: 117, syntheticHistoryCopies: 10000, requests: 10117, directoryKeys: 105, factsRead: 10115, usageCounted: 10112, retainedRequests: 10109, nativeDatabaseOverrides: ['prewarm request kind', 'boundary start timestamps', 'one logical request with three attempts', '10,000 copies of a delivered native request with unique IDs'] }, screenshot: options.browser ? join(temporary, 'real-host-report.png') : null, hostUrl: base, pageUrl: `${base}/plugins/${instanceId}/${view.pages[0].id}` };
   writeFileSync(join(temporary, 'result.json'), JSON.stringify(evidence, null, 2));
   console.log(`Evidence: ${temporary}`);
   if (options.keep) {
