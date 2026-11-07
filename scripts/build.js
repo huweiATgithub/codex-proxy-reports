@@ -32,7 +32,7 @@ if (script.includes('/__demo/') || script.includes('successful_usage_groups') ||
 }
 const registration = {
   routes: [
-    ['GET', 'api/task'], ['POST', 'api/tasks'], ['GET', 'api/reports'], ['GET', 'api/reports/detail'],
+    ['GET', 'api/task'], ['POST', 'api/preview'], ['POST', 'api/tasks'], ['GET', 'api/reports'], ['GET', 'api/reports/detail'],
   ].map(([method, path]) => ({
     method, path,
     request_content_types: method === 'POST' ? ['application/json'] : [],

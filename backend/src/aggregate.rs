@@ -6,7 +6,8 @@ use anyhow::{Context, Result, bail};
 use chrono::{DateTime, Utc};
 
 use crate::model::{
-    Group, KeyReport, MAX_REPORT_BYTES, Removed, Report, ResolvedConfiguration, UsageRecord,
+    Group, KeyReport, MAX_REPORT_BYTES, Removed, Report, ReportSource, ResolvedConfiguration,
+    UsageRecord,
 };
 
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -104,6 +105,7 @@ impl Accumulator {
         self,
         id: impl Into<String>,
         created_at: DateTime<Utc>,
+        source: ReportSource,
     ) -> Result<Option<Report>> {
         let keys = self.key_reports();
         if keys.is_empty() {
@@ -115,6 +117,7 @@ impl Accumulator {
             created_at,
             configuration: self.resolved.configuration,
             bounds: self.resolved.bounds,
+            source: Some(source),
             removed: self.removed,
             keys,
         };
@@ -161,6 +164,13 @@ mod tests {
         "2026-10-17T12:34:56Z".parse().unwrap()
     }
 
+    fn source() -> ReportSource {
+        ReportSource {
+            snapshot_at: now(),
+            retention_days: std::num::NonZeroU32::new(31),
+        }
+    }
+
     fn record() -> UsageRecord {
         UsageRecord {
             started_at: now() - chrono::Duration::hours(1),
@@ -190,7 +200,10 @@ mod tests {
         aggregate.add_record(key, &row).unwrap();
         row.user_agent = None;
         aggregate.add_record(key, &row).unwrap();
-        let report = aggregate.finish("report-1", now()).unwrap().unwrap();
+        let report = aggregate
+            .finish("report-1", now(), source())
+            .unwrap()
+            .unwrap();
         assert_eq!(
             report.removed,
             Removed {
@@ -213,7 +226,10 @@ mod tests {
         aggregate.add_record(key, &row).unwrap();
         row.user_agent = Some("ordinary-client".into());
         aggregate.add_record(key, &row).unwrap();
-        let report = aggregate.finish("report-1", now()).unwrap().unwrap();
+        let report = aggregate
+            .finish("report-1", now(), source())
+            .unwrap()
+            .unwrap();
         assert_eq!(report.removed.user_agent, 2);
         assert_eq!(report.keys[0].groups[0].requests, 1);
     }
@@ -228,7 +244,10 @@ mod tests {
         row.upstream_model = None;
         row.requested_model = Some("codex-auto-review".into());
         aggregate.add_record(key, &row).unwrap();
-        let report = aggregate.finish("report-1", now()).unwrap().unwrap();
+        let report = aggregate
+            .finish("report-1", now(), source())
+            .unwrap()
+            .unwrap();
         assert_eq!(report.removed.model, 1);
         assert_eq!(report.keys[0].groups[0].model, " codex-auto-review ");
     }
@@ -245,7 +264,10 @@ mod tests {
         aggregate.add_record(key, &row).unwrap();
         row.started_at = aggregate.resolved.bounds.start - chrono::Duration::milliseconds(1);
         aggregate.add_record(key, &row).unwrap();
-        let report = aggregate.finish("report-1", now()).unwrap().unwrap();
+        let report = aggregate
+            .finish("report-1", now(), source())
+            .unwrap()
+            .unwrap();
         assert_eq!(report.keys[0].groups[0].requests, 1);
         assert_eq!(report.removed, Removed::default());
     }
@@ -269,7 +291,10 @@ mod tests {
         row.requested_model = None;
         row.reasoning_effort = None;
         aggregate.add_record(key, &row).unwrap();
-        let report = aggregate.finish("report-1", now()).unwrap().unwrap();
+        let report = aggregate
+            .finish("report-1", now(), source())
+            .unwrap()
+            .unwrap();
         let groups = &report.keys[0].groups;
         assert_eq!(groups.len(), 5);
         assert!(groups.contains(&Group {
@@ -299,7 +324,10 @@ mod tests {
         aggregate
             .add_record(last_alphabetically, &record())
             .unwrap();
-        let report = aggregate.finish("report-1", now()).unwrap().unwrap();
+        let report = aggregate
+            .finish("report-1", now(), source())
+            .unwrap()
+            .unwrap();
         assert_eq!(
             report
                 .keys
@@ -315,7 +343,12 @@ mod tests {
         assert!(stored["keys"][0]["groups"][0].get("user_agent").is_none());
         let mut empty = accumulator();
         empty.add_key("empty", "Empty");
-        assert!(empty.finish("no-report", now()).unwrap().is_none());
+        assert!(
+            empty
+                .finish("no-report", now(), source())
+                .unwrap()
+                .is_none()
+        );
     }
 
     #[test]
@@ -325,7 +358,12 @@ mod tests {
         let mut row = record();
         row.upstream_model = Some("gpt-5.6-luna".into());
         aggregate.add_record(key, &row).unwrap();
-        assert!(aggregate.finish("no-report", now()).unwrap().is_none());
+        assert!(
+            aggregate
+                .finish("no-report", now(), source())
+                .unwrap()
+                .is_none()
+        );
     }
 
     #[test]
@@ -347,7 +385,7 @@ mod tests {
         aggregate.add_record(key, &record()).unwrap();
         assert!(
             aggregate
-                .finish("id".repeat(MAX_REPORT_BYTES), now())
+                .finish("id".repeat(MAX_REPORT_BYTES), now(), source())
                 .unwrap_err()
                 .to_string()
                 .contains("48 KiB")

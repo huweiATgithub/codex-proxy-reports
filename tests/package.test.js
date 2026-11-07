@@ -11,7 +11,7 @@ function fixture(t, mutate = () => {}) {
   const root = mkdtempSync(join(tmpdir(), 'reports-package-test-'));
   t.after(() => rmSync(root, { recursive: true, force: true }));
   for (const directory of ['dist/plugin', 'backend/target/release', 'archive']) mkdirSync(join(root, directory), { recursive: true });
-  const source = { manifestVersion: 2, publisher: 'huwei', name: 'usage-reports', version: '0.1.1', main: 'codex-proxy-reports', runtime: 'trustedProcess', engines: { 'codex-proxy-rs': '~3.41.2' }, resources: {} };
+  const source = { manifestVersion: 2, publisher: 'huwei', name: 'usage-reports', version: '0.1.1', main: 'codex-proxy-reports', runtime: 'trustedProcess', engines: { 'codex-proxy-rs': '~3.42.1' }, resources: {} };
   const contents = { 'codex-proxy-reports': Buffer.from('fixture executable'), 'app.js': Buffer.from('console.log("fixture");'), 'index.html': Buffer.from('<!doctype html>') };
   writeFileSync(join(root, 'plugin.json'), JSON.stringify(source));
   writeFileSync(join(root, 'dist/plugin/management.json'), JSON.stringify({ resources: [{ path: 'app.js' }, { path: 'index.html' }] }));

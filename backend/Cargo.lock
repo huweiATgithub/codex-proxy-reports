@@ -92,7 +92,7 @@ dependencies = [
 
 [[package]]
 name = "codex-proxy-reports"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "anyhow",
  "chrono",
@@ -165,7 +165,7 @@ dependencies = [
 [[package]]
 name = "gateway-plugin-sdk"
 version = "0.1.0"
-source = "git+https://github.com/zyycn/codex-proxy-rs?rev=ba3baddbda7293d1d76ea066dd5e42298618c15a#ba3baddbda7293d1d76ea066dd5e42298618c15a"
+source = "git+https://github.com/zyycn/codex-proxy-rs?rev=e0a3dc20dd907071fc78f81cfba9a58f00a27521#e0a3dc20dd907071fc78f81cfba9a58f00a27521"
 dependencies = [
  "base64",
  "semver",

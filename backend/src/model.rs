@@ -5,6 +5,7 @@ use chrono::{DateTime, Days, Duration, LocalResult, NaiveDate, TimeZone, Utc};
 use chrono_tz::Tz;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
+use std::num::NonZeroU32;
 
 pub const MAX_REPORT_BYTES: usize = 48 * 1024;
 
@@ -161,12 +162,20 @@ pub struct UsageRecord {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct ReportSource {
+    pub snapshot_at: DateTime<Utc>,
+    pub retention_days: Option<NonZeroU32>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct Report {
     pub format_version: u8,
     pub id: String,
     pub created_at: DateTime<Utc>,
     pub configuration: Configuration,
     pub bounds: Bounds,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<ReportSource>,
     pub removed: Removed,
     pub keys: Vec<KeyReport>,
 }

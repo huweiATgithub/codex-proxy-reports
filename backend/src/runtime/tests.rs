@@ -180,6 +180,11 @@ impl MockStore {
                 let end = (offset + limit).min(self.keys.len());
                 json!({"keys":self.keys[offset..end],"next_cursor":(end<self.keys.len()).then(||end.to_string())})
             }
+            "host.services.call" => {
+                assert_eq!(params["operation"], "settings.load");
+                assert!(params["input"].is_null());
+                json!({"Ok":{"usage_retention_days":31,"unrelated_setting":"discarded"}})
+            }
             "host.usage.records.scan" => {
                 assert_eq!(params["filter"]["records"]["start_ms"], 1790812800000_i64);
                 assert_eq!(params["filter"]["records"]["end_ms"], 1790899200000_i64);
@@ -489,6 +494,84 @@ fn shared(store: MockStore) -> Arc<StdMutex<MockStore>> {
 }
 
 #[tokio::test]
+async fn preview_resolves_timezone_bounds_without_a_task_or_history_scan() {
+    let store = shared(MockStore::fixture());
+    let mut harness = Harness::new(store.clone()).await;
+    let config = json!({
+        "window":{"kind":"custom","start_date":"2026-11-01","end_date":"2026-11-01"},
+        "timezone":"America/New_York","exclusions":{"user_agent_patterns":[],"models":[]}
+    });
+    let preview = harness
+        .request("POST", "api/preview", serde_json::to_vec(&config).unwrap())
+        .await;
+    assert_eq!(preview["status"], 200);
+    assert_eq!(
+        preview["body"]["bounds"],
+        json!({"start":"2026-11-01T04:00:00Z","end":"2026-11-02T05:00:00Z"})
+    );
+    assert_eq!(preview["body"]["retention_days"], 31);
+    assert!(harness.task().await.is_null());
+    {
+        let store = store.lock().unwrap();
+        assert!(store.values.is_empty());
+        assert!(
+            !store
+                .calls
+                .iter()
+                .any(|(method, _)| method.starts_with("host.usage."))
+        );
+    }
+    // Preview also remains available while a task exists, without replacing it.
+    let submitted = harness.submit().await;
+    assert_eq!(
+        harness
+            .request("POST", "api/preview", configuration())
+            .await["status"],
+        200
+    );
+    assert_eq!(harness.task().await["id"], submitted["body"]["task"]["id"]);
+    harness.shutdown().await;
+}
+
+#[tokio::test]
+async fn unavailable_retention_is_explicit_and_does_not_fail_generation() {
+    let mut mock = MockStore::fixture();
+    mock.failures = (0..2)
+        .map(|_| Failure {
+            method: "host.services.call",
+            namespace: None,
+            key: None,
+            state: None,
+            after_commit: false,
+        })
+        .collect();
+    let store = shared(mock);
+    let mut harness = Harness::new(store.clone()).await;
+    let preview = harness
+        .request("POST", "api/preview", configuration())
+        .await;
+    assert_eq!(preview["status"], 200);
+    assert!(preview["body"]["retention_days"].is_null());
+    harness.submit().await;
+    harness.reconcile().await;
+    let task = harness.task().await;
+    assert_eq!(task["state"], "complete");
+    assert_eq!(task["source"]["snapshot_at"], "2026-10-02T00:00:00Z");
+    assert!(task["source"]["retention_days"].is_null());
+    let report = store
+        .lock()
+        .unwrap()
+        .value("reports", task["report_id"].as_str().unwrap())
+        .unwrap()
+        .clone();
+    assert_eq!(report["source"], task["source"]);
+    harness.shutdown().await;
+    let mut restarted = Harness::new(store).await;
+    assert_eq!(restarted.task().await["source"], task["source"]);
+    restarted.shutdown().await;
+}
+
+#[tokio::test]
 async fn simultaneous_page_sessions_share_one_unfinished_task_and_cas_version() {
     let store = shared(MockStore::fixture());
     let mut harness = Harness::new(store.clone()).await;
@@ -543,6 +626,24 @@ async fn ten_thousand_snapshot_facts_use_fixed_bounds_then_publish_aggregate_onl
         assert_eq!(report["keys"].as_array().unwrap().len(), 1);
         assert_eq!(report["keys"][0]["groups"][0]["requests"], 10_000);
         assert!(report["keys"][0]["groups"][0].get("id").is_none());
+        assert_eq!(
+            report["source"],
+            json!({"snapshot_at":"2026-10-02T00:00:00Z","retention_days":31})
+        );
+        assert_ne!(report["source"]["snapshot_at"], report["created_at"]);
+        // Every persisted value contains counts/configuration, never raw request facts.
+        for (value, _) in store.values.values() {
+            let serialized = serde_json::to_string(value).unwrap();
+            assert!(!serialized.contains("request-"));
+            assert!(!serialized.contains("codex-cli/1"));
+            assert!(!serialized.contains("unrelated_setting"));
+        }
+        assert!(serde_json::to_vec(report).unwrap().len() < 2048);
+        let mut legacy = report.clone();
+        legacy.as_object_mut().unwrap().remove("source");
+        let restored: Report = serde_json::from_value(legacy.clone()).unwrap();
+        assert!(restored.source.is_none());
+        assert_eq!(serde_json::to_value(restored).unwrap(), legacy);
         assert_eq!(
             store
                 .calls

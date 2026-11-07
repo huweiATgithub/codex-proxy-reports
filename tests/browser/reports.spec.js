@@ -263,3 +263,67 @@ test('a failed generation exposes its error and returns to the submitted configu
   await expect(ui.locator('#user-agent-patterns')).toHaveValue('^retry-config');
   expect(await stats(request)).toEqual({ submissions: 1, reports: 0 });
 });
+
+test('review warns about expired history and the saved report keeps its snapshot metadata', async ({ page, request }) => {
+  const ui = await open(page);
+  await configure(ui);
+  await review(ui);
+  await expect(ui.locator('#retention-notice')).toBeHidden();
+  await ui.locator('#back-to-edit').click();
+  await ui.locator('#window-kind').selectOption('custom');
+  await ui.locator('#timezone').fill('UTC');
+  await ui.locator('#start-date').fill('2020-01-01');
+  await ui.locator('#end-date').fill('2020-01-02');
+  await review(ui);
+  await expect(ui.locator('#retention-notice')).toContainText('31-day history retention period');
+  await expect(ui.locator('#retention-notice')).toContainText('may be incomplete');
+  expect(await stats(request)).toEqual({ submissions: 0, reports: 0 });
+  await submit(ui);
+  await complete(ui);
+  await openResult(ui);
+  await expect(ui.locator('#report-metadata')).toContainText('may be incomplete');
+  await ui.getByText('Report details', { exact: true }).click();
+  await expect(ui.locator('#report-details')).toContainText('Snapshot: 17 Oct 2026, 12:34:56 · UTC');
+  await expect(ui.locator('#report-details')).toContainText('31 days');
+});
+
+test('unknown retention permits confirmation and older reports do not invent a snapshot', async ({ page, request }) => {
+  await request.post('/__demo/reset', { data: { seed: true } });
+  await page.route(/\/__demo\/api\/reports\/detail(?:\?|$)/, async route => {
+    const response = await route.fetch();
+    const body = await response.json();
+    delete body.report.source;
+    await route.fulfill({ response, json: body });
+  });
+  await page.route(/\/__demo\/api\/preview(?:\?|$)/, async route => {
+    const response = await route.fetch();
+    await route.fulfill({ response, json: { ...await response.json(), retention_days: null } });
+  });
+  const ui = await open(page);
+  await ui.locator('#reports-list').getByRole('button', { name: /^Open report/ }).first().click();
+  await expect(ui.locator('#charts .chart-card')).toHaveCount(6);
+  await ui.getByText('Report details', { exact: true }).click();
+  await expect(ui.locator('#report-details')).toContainText('Snapshot: Not recorded in this older report.');
+  await ui.locator('#reuse').click();
+  await review(ui);
+  await expect(ui.locator('#retention-notice')).toContainText('could not be checked');
+  await expect(ui.locator('#confirm-generate')).toBeEnabled();
+  expect((await stats(request)).submissions).toBe(0);
+});
+
+test('a delayed preview cannot replace a newly edited configuration', async ({ page, request }) => {
+  let releasePreview;
+  const held = new Promise(resolve => { releasePreview = resolve; });
+  await page.route(/\/__demo\/api\/preview(?:\?|$)/, async route => { await held; await route.continue(); });
+  const ui = await open(page);
+  await configure(ui);
+  await ui.locator('#continue-review').click();
+  await expect(ui.locator('#continue-review')).toBeDisabled();
+  await ui.locator('#timezone').fill('Asia/Tokyo');
+  releasePreview();
+  await expect(ui.locator('#continue-review')).toBeEnabled();
+  await expect(ui.locator('#configure-step')).toBeVisible();
+  await review(ui);
+  await expect(ui.locator('#confirmation-summary')).toContainText('Asia/Tokyo');
+  expect((await stats(request)).submissions).toBe(0);
+});

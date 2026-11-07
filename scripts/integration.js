@@ -152,6 +152,11 @@ async function browserSmoke(saved) {
   assert.equal(await ui.locator('#charts .usage-chart').count(), 2);
   assert.equal(await ui.locator('#report-total').textContent(), '10,109 retained requests');
   assert.ok((await ui.locator('#report-window').textContent()).includes('UTC'));
+  await ui.getByText('Report details', { exact: true }).click();
+  const details = await ui.locator('#report-details').textContent();
+  assert.match(details, /Snapshot:.+UTC/);
+  assert.ok(details.includes(`Host history retention at generation: ${saved.source.retention_days} days`));
+  await ui.getByText('Report details', { exact: true }).click();
   assert.equal(await page.locator('iframe').getAttribute('sandbox'), 'allow-scripts');
   const hostInk = await page.locator('html').evaluate(element => getComputedStyle(element).getPropertyValue('--z-color-text').trim());
   const frameTheme = await ui.locator('html').evaluate(element => {
@@ -229,7 +234,7 @@ async function run() {
   await startHost();
   pass('official host bootstrap, fresh PostgreSQL database and administrator authentication');
   const hostVersion = command(resolve(options['host-binary']), ['--version']);
-  assert.equal(hostVersion, '3.41.2');
+  assert.equal(hostVersion, '3.42.1');
   if (options['plugin-cli']) command(resolve(options['plugin-cli']), ['--version']);
   const archive = readFileSync(resolve(options.package));
   const packageSha256 = createHash('sha256').update(archive).digest('hex');
@@ -310,6 +315,13 @@ WHERE source.request_observation_json #>> '{request,userAgent}' = 'reports-integ
   await management('api/tasks', { ...configuration, timezone: 'Invalid/Zone' }, 400);
   assert.deepEqual(await management('api/task'), { task: null });
   pass('invalid regular expressions and timezones reject submission before creating a task');
+  const preview = await management('api/preview', { ...configuration, window: { kind: 'custom', start_date: '2020-01-01', end_date: '2020-01-01' } });
+  assert.equal(preview.bounds.start, '2020-01-01T00:00:00Z');
+  assert.ok(Number.isInteger(preview.retention_days) && preview.retention_days > 0);
+  assert.ok(Date.parse(preview.bounds.start) < Date.parse(preview.evaluated_at) - preview.retention_days * 86400000);
+  assert.deepEqual(await management('api/task'), { task: null });
+  assert.deepEqual((await management('api/reports')).reports, []);
+  pass('history preview reads native retention settings without submitting a task or saving a report');
   const startedAt = Date.now();
   const submitted = await management('api/tasks', configuration, 202);
   assert.ok(['queued', 'running'].includes(submitted.task.state));
@@ -322,6 +334,11 @@ WHERE source.request_observation_json #>> '{request,userAgent}' = 'reports-integ
   assert.equal(task.records_read, 10115);
   assert.ok(task.report_id);
   const { report: saved } = await management(`api/reports/detail?id=${encodeURIComponent(task.report_id)}`);
+  assert.equal(saved.source.retention_days, preview.retention_days);
+  assert.ok(Date.parse(saved.source.snapshot_at) >= startedAt);
+  assert.ok(Date.parse(saved.source.snapshot_at) <= Date.parse(saved.created_at));
+  assert.deepEqual(saved.source, task.source);
+  assert.doesNotMatch(JSON.stringify(saved), /integration-scan-|reports-integration\/|request_observation_json/);
   assert.equal(Date.parse(saved.bounds.start), dayStart.getTime());
   assert.equal(Date.parse(saved.bounds.end), dayEnd.getTime());
   assert.deepEqual(saved.removed, { user_agent: 2, model: 1 });
@@ -348,6 +365,7 @@ WHERE source.request_observation_json #>> '{request,userAgent}' = 'reports-integ
   for (let offset = 0; offset < emptyKeys.length; offset += 10) await Promise.all(emptyKeys.slice(offset, offset + 10).map((key) => json('/api/admin/client-keys/delete', { id: key.id })));
   const empty = await completeTask({ ...configuration, exclusions: { user_agent_patterns: ['.*'], models: [] } });
   assert.equal(empty.task.report_id, null);
+  assert.ok(Date.parse(empty.task.source.snapshot_at));
   assert.equal((await management('api/reports')).reports.length, 1);
   pass('empty successful task creates no report entry');
   sql('ALTER VIEW model_request_observations RENAME TO model_request_observations_integration_hidden');
@@ -379,7 +397,7 @@ WHERE source.request_observation_json #>> '{request,userAgent}' = 'reports-integ
   assert.equal((await management('api/reports')).reports.length, 1);
   pass('restart marks unfinished task interrupted without publishing partial data');
   if (options.browser) await browserSmoke(saved);
-  const evidence = { hostVersion, hostCommit: options['host-commit'] || 'ba3baddbda7293d1d76ea066dd5e42298618c15a', hostBinarySha256: createHash('sha256').update(readFileSync(resolve(options['host-binary']))).digest('hex'), packageSha256, completionMs, checks, report: saved, fixture: { upstreamRequests: 117, syntheticHistoryCopies: 10000, requests: 10117, directoryKeys: 105, factsRead: 10115, usageCounted: 10112, retainedRequests: 10109, nativeDatabaseOverrides: ['prewarm request kind', 'boundary start timestamps', 'one logical request with three attempts', '10,000 copies of a delivered native request with unique IDs'] }, screenshot: options.browser ? join(temporary, 'real-host-report.png') : null, hostUrl: base, pageUrl: `${base}/plugins/${instanceId}/${view.pages[0].id}` };
+  const evidence = { hostVersion, hostCommit: options['host-commit'] || 'e0a3dc20dd907071fc78f81cfba9a58f00a27521', hostBinarySha256: createHash('sha256').update(readFileSync(resolve(options['host-binary']))).digest('hex'), packageSha256, completionMs, checks, report: saved, fixture: { upstreamRequests: 117, syntheticHistoryCopies: 10000, requests: 10117, directoryKeys: 105, factsRead: 10115, usageCounted: 10112, retainedRequests: 10109, nativeDatabaseOverrides: ['prewarm request kind', 'boundary start timestamps', 'one logical request with three attempts', '10,000 copies of a delivered native request with unique IDs'] }, screenshot: options.browser ? join(temporary, 'real-host-report.png') : null, hostUrl: base, pageUrl: `${base}/plugins/${instanceId}/${view.pages[0].id}` };
   writeFileSync(join(temporary, 'result.json'), JSON.stringify(evidence, null, 2));
   console.log(`Evidence: ${temporary}`);
   if (options.keep) {

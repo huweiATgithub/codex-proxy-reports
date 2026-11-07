@@ -1,5 +1,5 @@
 //! 在单次宿主维护回调内扫描历史快照，保存任务与不可变报表
-use std::{collections::HashMap, sync::Arc, time::Duration};
+use std::{collections::HashMap, num::NonZeroU32, sync::Arc, time::Duration};
 
 use anyhow::{Context, Result, bail};
 use chrono::{DateTime, Utc};
@@ -8,7 +8,10 @@ use gateway_plugin_sdk::{
     call::{
         host::{KeyListRequest, StateGetResult, StatePutResult},
         management::{ManagementRegistration, ManagementRequest, ManagementResponse},
-        services::usage::{ScanUsageRecords, UsageReadFilter, UsageReadItem, UsageRecordFilter},
+        services::{
+            Operation, settings,
+            usage::{ScanUsageRecords, UsageReadFilter, UsageReadItem, UsageRecordFilter},
+        },
     },
     client::{ComposedPlugin, Empty, HostClient, PluginBuilder, TypedReply, UsageReader, methods},
 };
@@ -19,11 +22,37 @@ use uuid::Uuid;
 
 use crate::{
     aggregate::Accumulator,
-    model::{Bounds, Configuration, Report, UsageRecord},
+    model::{Bounds, Configuration, Report, ReportSource, UsageRecord},
 };
 
 const SAVE_RESERVE: Duration = Duration::from_secs(5);
 const HISTORY_LIMIT: usize = 20;
+
+// settings.load 返回全部设置；只解析报表需要的保留期，不缓存其他宿主设置。
+#[derive(Deserialize, Serialize)]
+struct UsageRetention {
+    usage_retention_days: NonZeroU32,
+}
+
+struct ReadUsageRetention;
+
+impl Operation for ReadUsageRetention {
+    const NAME: &'static str = <settings::Load as Operation>::NAME;
+    type Input = ();
+    type Output = UsageRetention;
+}
+
+async fn usage_retention_days(host: &HostClient) -> Option<NonZeroU32> {
+    // 保留期只用于提示；读取失败不能阻止历史扫描，也不能宣称历史完整。
+    tokio::time::timeout(
+        Duration::from_secs(2),
+        host.service::<ReadUsageRetention>(()),
+    )
+    .await
+    .ok()?
+    .ok()
+    .map(|settings| settings.usage_retention_days)
+}
 
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -40,6 +69,8 @@ pub struct Task {
     pub id: String,
     pub configuration: Configuration,
     pub bounds: Bounds,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<ReportSource>,
     pub submitted_at: DateTime<Utc>,
     pub state: TaskState,
     pub keys_processed: usize,
@@ -333,8 +364,9 @@ impl Runtime {
                 .context("Saved report unavailable")?;
             return Ok((200, json!({"report":report})));
         }
-        if request.method == "POST" && request.path == "api/tasks" {
-            if state.task.as_ref().is_some_and(Task::unfinished) {
+        if request.method == "POST" && matches!(request.path.as_str(), "api/tasks" | "api/preview")
+        {
+            if request.path == "api/tasks" && state.task.as_ref().is_some_and(Task::unfinished) {
                 return Ok((
                     409,
                     json!({"error":{"message":"A report task is already in progress"}}),
@@ -354,6 +386,15 @@ impl Runtime {
                 Ok(resolved) => resolved,
                 Err(error) => return Ok((400, json!({"error":{"message":format!("{error:#}")}}))),
             };
+            if request.path == "api/preview" {
+                let retention_days = usage_retention_days(host).await;
+                return Ok((
+                    200,
+                    json!({
+                        "bounds":resolved.bounds,"evaluated_at":now,"retention_days":retention_days,
+                    }),
+                ));
+            }
             if let Some(previous) = &state.task {
                 let previous_id = previous.id.clone();
                 // 上次索引写入的应答可能丢失，重新读取后才能判断数据是否尚未发布。
@@ -371,6 +412,7 @@ impl Runtime {
                 id: Uuid::new_v4().to_string(),
                 configuration: resolved.configuration.clone(),
                 bounds: resolved.bounds.clone(),
+                source: None,
                 submitted_at: now,
                 state: TaskState::Queued,
                 keys_processed: 0,
@@ -436,6 +478,7 @@ impl Runtime {
             .saturating_sub(SAVE_RESERVE);
         let result = tokio::time::timeout(budget, async {
             self.read_keys(host, &mut scan).await?;
+            let retention_days = usage_retention_days(host).await;
             let bounds = &scan.aggregate.resolved.bounds;
             reader = Some(
                 host.scan_usage_records(ScanUsageRecords {
@@ -456,8 +499,12 @@ impl Runtime {
                 .map_err(host_error)
                 .context("Could not open host usage snapshot")?,
             );
-            self.read_records(reader.as_mut().expect("opened reader"), &mut scan)
-                .await
+            self.read_records(
+                reader.as_mut().expect("opened reader"),
+                &mut scan,
+                retention_days,
+            )
+            .await
         })
         .await
         .context("Host usage snapshot exceeded the report processing budget")
@@ -476,15 +523,18 @@ impl Runtime {
             Ok(())
         };
         let mut state = self.state.lock().await;
-        match result.and(closed) {
-            Ok(()) => {
+        match result.and_then(|source| closed.map(|()| source)) {
+            Ok(source) => {
                 let id = state
                     .task
                     .as_ref()
                     .context("Missing report task")?
                     .id
                     .clone();
-                match scan.aggregate.finish(id, Utc::now()) {
+                if let Some(task) = &mut state.task {
+                    task.source = Some(source.clone());
+                }
+                match scan.aggregate.finish(id, Utc::now(), source) {
                     Ok(report) => {
                         if let Err(error) = self.publish(host, &mut state, report).await {
                             Self::fail(&mut state, error);
@@ -596,13 +646,25 @@ impl Runtime {
         }
     }
 
-    async fn read_records(&self, reader: &mut UsageReader, scan: &mut Scan) -> Result<()> {
+    async fn read_records(
+        &self,
+        reader: &mut UsageReader,
+        scan: &mut Scan,
+        retention_days: Option<NonZeroU32>,
+    ) -> Result<ReportSource> {
+        let mut snapshot_at = None;
         while let Some(batch) = reader
             .next_batch()
             .await
             .map_err(host_error)
             .context("Could not read host usage snapshot")?
         {
+            if snapshot_at.is_none() {
+                snapshot_at = Some(
+                    DateTime::from_timestamp_millis(batch.observation.generated_at_ms)
+                        .context("Host usage snapshot has an invalid observation time")?,
+                );
+            }
             let count = batch.items.len() as u64;
             for item in batch.items {
                 let UsageReadItem::Record(fact) = item else {
@@ -637,7 +699,10 @@ impl Runtime {
         if let Some(task) = &mut self.state.lock().await.task {
             task.keys_processed = scan.keys.len();
         }
-        Ok(())
+        Ok(ReportSource {
+            snapshot_at: snapshot_at.context("Host usage snapshot has no observation time")?,
+            retention_days,
+        })
     }
 }
 

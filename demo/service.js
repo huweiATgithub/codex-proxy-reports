@@ -58,8 +58,9 @@ export function createDemoService({ now = () => new Date(), duration = 3200, see
     for (const key of keys) key.groups = [...grouped.get(key.id).values()];
     const retained = keys.filter(key => key.groups.length);
     task.state = 'complete';
+    task.source = { snapshot_at: task.submitted_at, retention_days: 31 };
     if (retained.length) {
-      const report = { format_version: 1, id: task.id, created_at: createdAt, configuration: task.configuration, bounds: task.bounds, removed, keys: retained };
+      const report = { format_version: 1, id: task.id, created_at: createdAt, configuration: task.configuration, bounds: task.bounds, source: task.source, removed, keys: retained };
       const summary = { id: report.id, created_at: report.created_at, total_requests: retained.reduce((sum, key) => sum + key.groups.reduce((total, group) => total + group.requests, 0), 0), keys_count: retained.length };
       details.set(report.id, report);
       reports.unshift(summary);
@@ -119,13 +120,14 @@ export function createDemoService({ now = () => new Date(), duration = 3200, see
         const report = details.get(query.get('id'));
         return report ? reply(200, { report }) : fail(404, 'The saved report was not found.');
       }
-      if (method === 'POST' && path === 'api/tasks') {
-        if (pending) return fail(409, 'A report task is already running.');
+      if (method === 'POST' && ['api/tasks', 'api/preview'].includes(path)) {
+        if (pending && path === 'api/tasks') return fail(409, 'A report task is already running.');
         try {
           const configuration = JSON.parse(body.toString('utf8'));
           const bounds = resolveBounds(configuration, now());
           configuration.exclusions.user_agent_patterns.forEach(pattern => new RegExp(pattern));
           if (!Array.isArray(configuration.exclusions.models)) throw new Error('Model exclusions must be a list.');
+          if (path === 'api/preview') return reply(200, { bounds, evaluated_at: now().toISOString(), retention_days: 31 });
           submissions++;
           task = { id: randomUUID(), submitted_at: now().toISOString(), configuration, bounds, state: 'queued', keys_processed: 0, keys_total: fixture.client_keys.length, records_read: 0, report_id: null, error: null };
           started = Date.now(); pending = { empty: emptyNext, outcome: outcomeNext }; emptyNext = false; outcomeNext = null;

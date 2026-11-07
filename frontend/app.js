@@ -1,9 +1,10 @@
 import { renderChart, selectChoices } from './chart.js';
+import { parsePreview, parseSource, retentionNotice } from './source.js';
 import './style.css';
 
 const byId = id => document.getElementById(id);
 const host = window.codexProxyPlugin;
-const state = { view: 'home', task: null, taskId: null, report: null, connected: false, submitting: false, pendingConfiguration: null, reportRequest: 0, taskRequest: 0, reportsRequest: 0 };
+const state = { view: 'home', task: null, taskId: null, report: null, connected: false, submitting: false, pendingConfiguration: null, reportRequest: 0, taskRequest: 0, reportsRequest: 0, reviewRequest: 0 };
 const terminalStates = new Set(['complete', 'failed', 'interrupted']);
 const count = value => value.toLocaleString();
 let browserTimezone = 'UTC';
@@ -48,7 +49,7 @@ function parseTask(task) {
     || (task.error !== null && typeof task.error !== 'string')) throw new Error('The plugin returned an invalid task status.');
   if (!Number.isFinite(Date.parse(task.submitted_at)) || !task.bounds || !Number.isFinite(Date.parse(task.bounds.start)) || !Number.isFinite(Date.parse(task.bounds.end))) throw new Error('The plugin returned invalid task dates.');
   parseConfiguration(task.configuration);
-  return task;
+  return { ...task, source: parseSource(task.source) };
 }
 
 function parseConfiguration(configuration) {
@@ -85,7 +86,7 @@ function parseReport(report) {
     if (!Number.isSafeInteger(total)) throw new Error('The report request count exceeds the supported range.');
     charts.push({ id: key.id, name: key.name, chart });
   }
-  return { ...report, configuration, charts, total };
+  return { ...report, configuration, source: parseSource(report.source), charts, total };
 }
 
 function formatTime(value, timezone) {
@@ -135,6 +136,8 @@ function notice(id, error) {
 }
 function navigate(view) {
   state.view = view;
+  state.reviewRequest++;
+  byId('continue-review').disabled = false;
   state.reportRequest++;
   for (const name of ['home', 'wizard', 'task', 'report']) byId(name + '-view').hidden = name !== view;
   byId(view + '-view').querySelector('h1').focus();
@@ -191,6 +194,11 @@ function renderTask() {
   if (busy()) panel.append(element('div', 'activity', ''));
   panel.append(element('p', 'progress-copy', progressLabel(task)), element('p', 'muted small', 'Submitted ' + formatTime(task.submitted_at, browserTimezone)));
   if (task.bounds) panel.append(element('p', 'task-window', formatTime(task.bounds.start, task.configuration.timezone) + ' — ' + formatTime(task.bounds.end, task.configuration.timezone) + ' · ' + task.configuration.timezone));
+  if (task.source) {
+    panel.append(metadataRow('Snapshot:', formatTime(task.source.snapshot_at, task.configuration.timezone) + ' · ' + task.configuration.timezone));
+    const warning = retentionNotice(task.bounds, task.source.retention_days, task.source.snapshot_at);
+    if (warning) panel.append(element('p', 'notice', warning));
+  }
   if (task.state === 'queued') panel.append(element('p', 'muted', 'Waiting for the host to begin processing.'));
   if (busy()) panel.append(element('p', 'muted', 'You can leave this page. Generation continues while the host and plugin remain running.'));
   if (task.error) panel.append(element('p', 'error-copy', task.error));
@@ -248,6 +256,12 @@ function renderReport(report) {
     metadataRow('Models:', (exclusions.models.join(', ') || 'None') + ' · ' + count(report.removed.model) + ' additional requests removed'),
   );
   byId('report-details').replaceChildren(metadataRow('Submitted period:', windowLabel(report.configuration)), metadataRow('Scope:', 'All host Keys. Effective start is included; effective end is excluded.'));
+  byId('report-details').append(metadataRow('Snapshot:', report.source ? formatTime(report.source.snapshot_at, report.configuration.timezone) + ' · ' + report.configuration.timezone : 'Not recorded in this older report.'));
+  if (report.source) {
+    byId('report-details').append(metadataRow('Host history retention at generation:', report.source.retention_days === null ? 'Unavailable' : report.source.retention_days + ' days'));
+    const warning = retentionNotice(report.bounds, report.source.retention_days, report.source.snapshot_at);
+    if (warning) byId('report-metadata').append(element('p', 'notice', warning));
+  }
   for (const key of report.charts) {
     const card = element('article', 'chart-card');
     const heading = element('div', 'card-heading');
@@ -391,17 +405,31 @@ function setStep(step) {
     else byId(name + '-marker').removeAttribute('aria-current');
   }
 }
-function reviewConfiguration() {
+async function reviewConfiguration() {
+  if (byId('continue-review').disabled) return;
+  const sequence = ++state.reviewRequest;
   byId('configure-error').hidden = true;
   if (!byId('configuration').reportValidity()) return;
   try {
-    state.pendingConfiguration = formConfiguration();
+    const configuration = formConfiguration();
+    byId('continue-review').disabled = true;
+    const preview = parsePreview(await request('POST', 'api/preview', configuration));
+    if (sequence !== state.reviewRequest || state.view !== 'wizard'
+      || JSON.stringify(configuration) !== JSON.stringify(formConfiguration())) return;
+    state.pendingConfiguration = configuration;
     fillSummary(byId('confirmation-summary'), state.pendingConfiguration);
+    const warning = retentionNotice(preview.bounds, preview.retention_days, preview.evaluated_at);
+    byId('retention-notice').textContent = warning;
+    byId('retention-notice').hidden = !warning;
     byId('confirmation-error').hidden = true;
     setStep('review');
     byId('review-step').querySelector('h2').focus();
     updateActions();
-  } catch (error) { notice('configure-error', error); }
+  } catch (error) {
+    if (sequence === state.reviewRequest && state.view === 'wizard') notice('configure-error', error);
+  } finally {
+    if (sequence === state.reviewRequest) byId('continue-review').disabled = false;
+  }
 }
 byId('new-report').addEventListener('click', () => startWizard());
 document.querySelectorAll('[data-home]').forEach(node => node.addEventListener('click', () => navigate('home')));
