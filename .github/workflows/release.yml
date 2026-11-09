@@ -71,6 +71,9 @@ jobs:
       RELEASE_COMMIT: ${{ needs.preflight.outputs.commit }}
       VERSION: ${{ needs.verify.outputs.version }}
       ARCHIVE: ${{ needs.verify.outputs.archive }}
+      HOST_RANGE: ${{ needs.verify.outputs.host-range }}
+      SDK_REVISION: ${{ needs.verify.outputs.sdk-revision }}
+      HOST_MATRIX: ${{ needs.verify.outputs.host-matrix }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -95,10 +98,13 @@ jobs:
           create-storage-record: false
       - name: Prepare release notes
         run: |
+          verified_hosts=$(node --input-type=module -e 'console.log(JSON.parse(process.env.HOST_MATRIX).include.map(host => host.version).join(", "))')
           cat > "$RUNNER_TEMP/release-notes.md" <<EOF_NOTES
-          Usage reports **$VERSION** for **codex-proxy-rs v3.42.1 or a later v3.42.x patch**.
+          Usage reports **$VERSION**, declaring Host compatibility **$HOST_RANGE**.
 
-          Adds a history-retention warning before generation and records the host snapshot time and observed retention policy with each report. Existing saved reports remain readable. If retention settings are unavailable, the page says so and generation can continue.
+          Decouples the Host range, SDK build revision and verification matrix. Requires plugin protocol v7, management v2 and maintenance v1. The same package passed real-host acceptance on **$verified_hosts**. SDK and packaging CLI remain pinned to commit \`$SDK_REVISION\`.
+
+          Compatible Host minor releases no longer require a new plugin release. Hosts must continue to provide the consumed protocol, capabilities and history-reading contracts; the declared range is not a claim that future Hosts have already been tested.
 
           Reports store aggregate counts, configuration and source metadata. Request facts are processed one batch at a time and discarded. Retains the latest 20 nonempty reports, each limited to 48 KiB.
 
@@ -106,7 +112,7 @@ jobs:
 
           Install \`$ARCHIVE\` through the host plugin manager. Linux x86_64 GNU, glibc 2.34 or newer. No instance configuration or middleware binding is required.
 
-          This exact package passed Rust, JavaScript, browser and real-host v3.42.1 acceptance tests. SHA256 checksums and GitHub build provenance accompany the package.
+          This exact package passed Rust, JavaScript, browser and all listed real-host acceptance tests. SHA256 checksums and GitHub build provenance accompany the package.
 
           Verify provenance with \`gh attestation verify $ARCHIVE --repo $GH_REPO\`.
           EOF_NOTES

@@ -13,6 +13,12 @@ on:
         value: ${{ jobs.verify.outputs.tag }}
       archive:
         value: ${{ jobs.verify.outputs.archive }}
+      host-range:
+        value: ${{ jobs.verify.outputs.host-range }}
+      sdk-revision:
+        value: ${{ jobs.verify.outputs.sdk-revision }}
+      host-matrix:
+        value: ${{ jobs.verify.outputs.host-matrix }}
 
 permissions:
   contents: read
@@ -30,6 +36,9 @@ jobs:
       version: ${{ steps.version.outputs.version }}
       tag: ${{ steps.version.outputs.tag }}
       archive: ${{ steps.version.outputs.archive }}
+      host-range: ${{ steps.version.outputs.host-range }}
+      sdk-revision: ${{ steps.version.outputs.sdk-revision }}
+      host-matrix: ${{ steps.version.outputs.host-matrix }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -39,14 +48,14 @@ jobs:
         with:
           node-version: '24'
           cache: npm
-      - name: Check release versions
-        id: version
-        run: node scripts/version.js >> "$GITHUB_OUTPUT"
       - name: Install the pinned Rust toolchain
         run: |
           rustup toolchain install "$(awk -F '"' '/^channel =/ { print $2 }' rust-toolchain.toml)" \
             --profile minimal --component clippy --component rustfmt
       - run: npm ci
+      - name: Check versions, SDK pin and Host verification matrix
+        id: version
+        run: node scripts/host-compatibility.js >> "$GITHUB_OUTPUT"
       - name: Build private management resources
         run: npm run build
       - name: Rust formatting, lint and tests
@@ -60,12 +69,18 @@ jobs:
         run: npx playwright install --with-deps chromium
       - name: Browser tests
         run: npx playwright test
-      - name: Prepare the matching host and packaging CLI
-        id: host
-        run: bash scripts/prepare-host.sh "$RUNNER_TEMP/host-v3.42.1"
+      - name: Check out the packaging CLI at the SDK revision
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: zyycn/codex-proxy-rs
+          ref: ${{ steps.version.outputs.sdk-revision }}
+          path: _host-sdk
+          persist-credentials: false
+      - name: Build the matching packaging CLI
+        run: cargo build --manifest-path _host-sdk/backend/Cargo.toml --locked --package codex-proxy-plugin-cli --bin cpr-plugin --target-dir _host-sdk/cli-target
       - name: Build and package the plugin
         env:
-          CPR_PLUGIN: ${{ steps.host.outputs.plugin-cli }}
+          CPR_PLUGIN: ${{ github.workspace }}/_host-sdk/cli-target/debug/cpr-plugin
           ARCHIVE: ${{ steps.version.outputs.archive }}
         run: |
           cargo build --manifest-path backend/Cargo.toml --release --locked
@@ -77,17 +92,6 @@ jobs:
           test "$(printf '%s\n' "$maximum" '2.34' | sort -V | tail -n 1)" = '2.34'
           cd dist/packages
           sha256sum "$ARCHIVE" "$ARCHIVE.sha256" > SHA256SUMS
-      - name: Install and test the exact package on host v3.42.1
-        env:
-          HOST_BINARY: ${{ steps.host.outputs.host-binary }}
-          HOST_WEB: ${{ steps.host.outputs.host-web }}
-          CPR_PLUGIN: ${{ steps.host.outputs.plugin-cli }}
-          ARCHIVE: ${{ steps.version.outputs.archive }}
-          TMPDIR: ${{ runner.temp }}/integration
-        run: |
-          mkdir -p "$TMPDIR"
-          npm run test:integration -- --host-binary "$HOST_BINARY" --host-web "$HOST_WEB" \
-            --plugin-cli "$CPR_PLUGIN" --package "dist/packages/$ARCHIVE" --browser
       - name: Upload the tested installable package
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
@@ -99,22 +103,57 @@ jobs:
           if-no-files-found: error
           retention-days: 14
           compression-level: 0
-      - name: Preserve browser and host acceptance evidence
+      - name: Preserve browser evidence
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: test-evidence
           path: |
             test-results/
-            ${{ runner.temp }}/integration/codex-reports-integration-*/result.json
-            ${{ runner.temp }}/integration/codex-reports-integration-*/host.log
-            ${{ runner.temp }}/integration/codex-reports-integration-*/real-host-report.png
           if-no-files-found: ignore
           retention-days: 7
       - name: Summarize the tested package
         env:
           VERSION: ${{ steps.version.outputs.version }}
+          HOST_RANGE: ${{ steps.version.outputs.host-range }}
         run: |
-          printf 'Tested **%s**, Linux x86_64 GNU, host **v3.42.1**.\n\n' "$VERSION" >> "$GITHUB_STEP_SUMMARY"
-          printf 'Rust, JavaScript, browser, package integrity and real-host acceptance checks passed.\n\n' >> "$GITHUB_STEP_SUMMARY"
+          printf 'Built **%s**, Linux x86_64 GNU, Host range **%s**.\n\n' "$VERSION" "$HOST_RANGE" >> "$GITHUB_STEP_SUMMARY"
+          printf 'Rust, JavaScript, browser and package integrity checks passed. Real-host verification uses the same archive in every matrix job.\n\n' >> "$GITHUB_STEP_SUMMARY"
           cat dist/packages/SHA256SUMS >> "$GITHUB_STEP_SUMMARY"
+
+  integration:
+    name: Host acceptance (${{ matrix.version }})
+    needs: verify
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.verify.outputs.host-matrix) }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ github.sha }}
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24'
+          cache: npm
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: linux-x86_64-package
+          path: dist/packages
+      - name: Test the shared package on the selected Host
+        env:
+          HOST_VERSION: ${{ matrix.version }}
+          PLUGIN_ARCHIVE: dist/packages/${{ needs.verify.outputs.archive }}
+        run: bash scripts/ci-integration.sh
+      - name: Preserve Host acceptance evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: host-evidence-${{ matrix.version }}
+          path: dist/verification/${{ matrix.version }}/
+          if-no-files-found: error
+          retention-days: 14

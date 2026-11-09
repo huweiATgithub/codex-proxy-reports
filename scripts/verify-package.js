@@ -11,6 +11,7 @@ const json = (path) => JSON.parse(readFileSync(path, 'utf8'));
 export function verifyPackage(archivePath, root = process.cwd()) {
   const archive = resolve(archivePath);
   const source = json(join(root, 'plugin.json'));
+  const { protocolVersion } = json(join(root, 'host-compatibility.json')).requirements;
   const registration = json(join(root, 'dist/plugin/management.json'));
   const resources = registration.resources.map(({ path }) => path);
   const files = [source.main, ...resources].sort();
@@ -34,7 +35,7 @@ export function verifyPackage(archivePath, root = process.cwd()) {
   for (const field of ['manifestVersion', 'publisher', 'name', 'version', 'main', 'runtime', 'engines']) {
     assert.deepEqual(manifest[field], source[field], `Packaged ${field} must match plugin.json`);
   }
-  assert.equal(manifest.package.protocolVersion, 7, 'Package protocol must match the v3.42 host');
+  assert.equal(manifest.package.protocolVersion, protocolVersion, 'Package protocol must match the SDK protocol');
   assert.deepEqual(manifest.package.target, { os: 'linux', architecture: 'x86_64' }, 'Package must target Linux x86_64');
   assert.deepEqual(Object.keys(manifest.resources).sort(), [...resources].sort(), 'Packaged resources must match management registration');
   assert.deepEqual(Object.keys(manifest.package.files).sort(), files, 'Package digests must cover exactly the binary and resources');

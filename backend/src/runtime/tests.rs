@@ -493,6 +493,13 @@ fn shared(store: MockStore) -> Arc<StdMutex<MockStore>> {
     Arc::new(StdMutex::new(store))
 }
 
+#[test]
+fn compatibility_policy_matches_the_compiled_sdk_protocol() {
+    let policy: Value =
+        serde_json::from_slice(include_bytes!("../../../host-compatibility.json")).unwrap();
+    assert_eq!(policy["requirements"]["protocolVersion"], PROTOCOL_VERSION);
+}
+
 #[tokio::test]
 async fn preview_resolves_timezone_bounds_without_a_task_or_history_scan() {
     let store = shared(MockStore::fixture());

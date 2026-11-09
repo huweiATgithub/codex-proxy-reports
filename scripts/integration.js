@@ -5,6 +5,7 @@ import { once } from 'node:events';
 import { closeSync, mkdtempSync, mkdirSync, openSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
+import { loadCompatibility } from './host-compatibility.js';
 import { startUpstream } from '../tests/integration/upstream.js';
 
 const options = {};
@@ -13,11 +14,15 @@ for (let index = 2; index < process.argv.length; index++) {
   assert.ok(flag.startsWith('--'), `Expected an option, received ${flag}`);
   options[flag.slice(2)] = process.argv[index + 1]?.startsWith('--') || !process.argv[index + 1] ? true : process.argv[++index];
 }
-if (!options['host-binary'] || !options['host-web'] || !options.package) {
-  console.error('Usage: node scripts/integration.js --host-binary /path/codex-proxy-rs --host-web /path/web/dist --package /path/plugin.tar.gz [--plugin-cli /path/cpr-plugin] [--postgres-container isolated-pg --redis-container isolated-redis] [--browser] [--keep]');
+if (!options['host-binary'] || !options['host-web'] || !options.package || !options['host-version']) {
+  console.error('Usage: node scripts/integration.js --host-binary /path/codex-proxy-rs --host-web /path/web/dist --package /path/plugin.tar.gz --host-version X.Y.Z [--plugin-cli /path/cpr-plugin] [--postgres-container isolated-pg --redis-container isolated-redis] [--browser] [--keep]');
   process.exit(2);
 }
 
+const policy = loadCompatibility();
+const expectedHost = policy.hosts.find(host => host.version === options['host-version']);
+assert.ok(expectedHost, 'Host must be present in the verification matrix');
+if (options['host-commit']) assert.equal(options['host-commit'], expectedHost.revision);
 const temporary = mkdtempSync(join(tmpdir(), 'codex-reports-integration-'));
 const suffix = randomBytes(5).toString('hex');
 const pgName = options['postgres-container'] || `codex-reports-pg-${suffix}`;
@@ -234,7 +239,7 @@ async function run() {
   await startHost();
   pass('official host bootstrap, fresh PostgreSQL database and administrator authentication');
   const hostVersion = command(resolve(options['host-binary']), ['--version']);
-  assert.equal(hostVersion, '3.42.1');
+  assert.equal(hostVersion, expectedHost.version);
   if (options['plugin-cli']) command(resolve(options['plugin-cli']), ['--version']);
   const archive = readFileSync(resolve(options.package));
   const packageSha256 = createHash('sha256').update(archive).digest('hex');
@@ -397,7 +402,7 @@ WHERE source.request_observation_json #>> '{request,userAgent}' = 'reports-integ
   assert.equal((await management('api/reports')).reports.length, 1);
   pass('restart marks unfinished task interrupted without publishing partial data');
   if (options.browser) await browserSmoke(saved);
-  const evidence = { hostVersion, hostCommit: options['host-commit'] || 'e0a3dc20dd907071fc78f81cfba9a58f00a27521', hostBinarySha256: createHash('sha256').update(readFileSync(resolve(options['host-binary']))).digest('hex'), packageSha256, completionMs, checks, report: saved, fixture: { upstreamRequests: 117, syntheticHistoryCopies: 10000, requests: 10117, directoryKeys: 105, factsRead: 10115, usageCounted: 10112, retainedRequests: 10109, nativeDatabaseOverrides: ['prewarm request kind', 'boundary start timestamps', 'one logical request with three attempts', '10,000 copies of a delivered native request with unique IDs'] }, screenshot: options.browser ? join(temporary, 'real-host-report.png') : null, hostUrl: base, pageUrl: `${base}/plugins/${instanceId}/${view.pages[0].id}` };
+  const evidence = { hostVersion, hostCommit: expectedHost.revision, hostBinarySha256: createHash('sha256').update(readFileSync(resolve(options['host-binary']))).digest('hex'), packageSha256, completionMs, checks, report: saved, fixture: { upstreamRequests: 117, syntheticHistoryCopies: 10000, requests: 10117, directoryKeys: 105, factsRead: 10115, usageCounted: 10112, retainedRequests: 10109, nativeDatabaseOverrides: ['prewarm request kind', 'boundary start timestamps', 'one logical request with three attempts', '10,000 copies of a delivered native request with unique IDs'] }, screenshot: options.browser ? 'real-host-report.png' : null, hostUrl: base, pageUrl: `${base}/plugins/${instanceId}/${view.pages[0].id}` };
   writeFileSync(join(temporary, 'result.json'), JSON.stringify(evidence, null, 2));
   console.log(`Evidence: ${temporary}`);
   if (options.keep) {

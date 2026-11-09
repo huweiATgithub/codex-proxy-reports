@@ -1,0 +1,31 @@
+{
+  "primaryHost": "3.44.0",
+  "requirements": {
+    "manifestVersion": 2,
+    "protocolVersion": 7,
+    "capabilities": {
+      "management": 2,
+      "maintenance": 1
+    }
+  },
+  "hosts": [
+    {
+      "version": "3.41.2",
+      "revision": "ba3baddbda7293d1d76ea066dd5e42298618c15a",
+      "binarySha256": "20ec3c5233a3388d07a0d5dab843485778ecf4b3455ffa99a044e6733ed6c51b",
+      "sourceSha256": "256f5fe9410986fafa9b54954452a98d1437971ee535d4eefcdb7ff7d62ceb16"
+    },
+    {
+      "version": "3.42.1",
+      "revision": "e0a3dc20dd907071fc78f81cfba9a58f00a27521",
+      "binarySha256": "b58fc9fe3166b66ec9f849976a45d097213d1cf14163b84308280ed1c81b3ca4",
+      "sourceSha256": "fa0fa23eabdae21e9568974700a4150e818594c7e874f50110bed36ca030b872"
+    },
+    {
+      "version": "3.44.0",
+      "revision": "c622f085748f812936a7371fcc85d1621fa72ca8",
+      "binarySha256": "c2cab5f4ef0ebb7d0de375ea07d2f1bc2a0353cc7523a3cf3552ebbf16480db5",
+      "sourceSha256": "773863ddab6f8ac2c928712f88968c8024ccb03b844b30b4a950b011dcd26574"
+    }
+  ]
+}

@@ -14,6 +14,7 @@ function fixture(t, mutate = () => {}) {
   const source = { manifestVersion: 2, publisher: 'huwei', name: 'usage-reports', version: '0.1.1', main: 'codex-proxy-reports', runtime: 'trustedProcess', engines: { 'codex-proxy-rs': '~3.42.1' }, resources: {} };
   const contents = { 'codex-proxy-reports': Buffer.from('fixture executable'), 'app.js': Buffer.from('console.log("fixture");'), 'index.html': Buffer.from('<!doctype html>') };
   writeFileSync(join(root, 'plugin.json'), JSON.stringify(source));
+  writeFileSync(join(root, 'host-compatibility.json'), JSON.stringify({ requirements: { protocolVersion: 7 } }));
   writeFileSync(join(root, 'dist/plugin/management.json'), JSON.stringify({ resources: [{ path: 'app.js' }, { path: 'index.html' }] }));
   for (const [name, bytes] of Object.entries(contents)) writeFileSync(join(root, name === source.main ? 'backend/target/release' : 'dist/plugin', name), bytes);
   const manifest = { ...source, resources: { 'app.js': 'application/javascript', 'index.html': 'text/html' }, package: { protocolVersion: 7, target: { os: 'linux', architecture: 'x86_64' }, files: Object.fromEntries(Object.entries(contents).map(([name, bytes]) => [name, createHash('sha256').update(bytes).digest('hex')])) } };
@@ -36,6 +37,11 @@ test('verifies an executable package against its registration, local build and c
 test('rejects corrupted member bytes even when the outer archive checksum is valid', (t) => {
   const { archive, root } = fixture(t, ({ contents }) => { contents['app.js'] = Buffer.from('changed after embedded digests were calculated'); });
   assert.throws(() => verifyPackage(archive, root), /app\.js SHA256/);
+});
+
+test('rejects a package with a different SDK protocol', (t) => {
+  const { archive, root } = fixture(t, ({ manifest }) => { manifest.package.protocolVersion = 8; });
+  assert.throws(() => verifyPackage(archive, root), /Package protocol must match the SDK protocol/);
 });
 
 test('rejects a package for a different source version', (t) => {

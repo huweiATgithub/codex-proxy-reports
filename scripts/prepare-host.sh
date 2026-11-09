@@ -1,16 +1,13 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Keep the acceptance host and packaging CLI on the plugin's SDK baseline.
-readonly host_version='3.42.1'
-readonly host_commit='e0a3dc20dd907071fc78f81cfba9a58f00a27521'
-readonly host_sha256='b58fc9fe3166b66ec9f849976a45d097213d1cf14163b84308280ed1c81b3ca4'
-readonly source_sha256='fa0fa23eabdae21e9568974700a4150e818594c7e874f50110bed36ca030b872'
-
-if [[ $# -ne 1 ]]; then
-  printf 'Usage: bash scripts/prepare-host.sh OUTPUT_DIRECTORY\n' >&2
+# Download a verification Host independently of the SDK used to build the plugin.
+if [[ $# -ne 2 ]]; then
+  printf 'Usage: bash scripts/prepare-host.sh OUTPUT_DIRECTORY HOST_VERSION\n' >&2
   exit 2
 fi
+read -r host_version host_commit host_sha256 source_sha256 < <(node scripts/host-compatibility.js --host "$2")
+readonly host_version host_commit host_sha256 source_sha256
 if [[ $(uname -s) != Linux || $(uname -m) != x86_64 ]]; then
   printf 'The pinned acceptance host requires Linux x86_64.\n' >&2
   exit 2
@@ -40,20 +37,15 @@ download "https://codeload.github.com/zyycn/codex-proxy-rs/tar.gz/${host_commit}
 tar --extract --gzip --file "$host_archive" --strip-components=1 --directory "$destination/host"
 tar --extract --gzip --file "$source_archive" --strip-components=1 --directory "$destination/source"
 
-# Upstream ships the host and web assets, but no standalone cpr-plugin binary.
-cargo build --manifest-path "$destination/source/backend/Cargo.toml" --locked \
-  --package codex-proxy-plugin-cli --bin cpr-plugin --target-dir "$destination/cli-target"
+node scripts/host-compatibility.js --check-host "$destination/source" "$host_version"
 
 host_binary="$destination/host/codex-proxy-rs"
 host_web="$destination/host/web/dist"
-plugin_cli="$destination/cli-target/debug/cpr-plugin"
 test -x "$host_binary"
 test -f "$host_web/index.html"
-test -x "$plugin_cli"
 test "$("$host_binary" --version)" = "$host_version"
-"$plugin_cli" --version
 
-printf 'host-binary=%s\nhost-web=%s\nplugin-cli=%s\n' "$host_binary" "$host_web" "$plugin_cli"
+printf 'host-binary=%s\nhost-web=%s\n' "$host_binary" "$host_web"
 if [[ -n ${GITHUB_OUTPUT:-} ]]; then
-  printf 'host-binary=%s\nhost-web=%s\nplugin-cli=%s\n' "$host_binary" "$host_web" "$plugin_cli" >> "$GITHUB_OUTPUT"
+  printf 'host-binary=%s\nhost-web=%s\n' "$host_binary" "$host_web" >> "$GITHUB_OUTPUT"
 fi
